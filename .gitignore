@@ -1,0 +1,6 @@
+*.pyc
+*.pyo
+*~
+*.save
+*.orig
+tumps.json
