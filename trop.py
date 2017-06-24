@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 
 """ 
-TODO: Check that pipe-joined values are being separated properly
-TODO: Have final query's values be parsed as their correct types using lookup
-TODO: Format values appropriately
-TODO: Dates not being parsed properly
-TODO: Ignore values that don't parse as intended type
-TODO: Properties with same name and different type
-TODO: Properties that are basically the same with different names
+TODO: Cache failed categories
+TODO: Propertise that are basically the same with different names/prefixes
+TODO: Download thumbnails
+TODO: Make pdf
 """
 
+import os
+import os.path
 import time
 import re
 import sys
@@ -32,7 +31,7 @@ MAX_DECK_SIZE = 50
 MIN_NUM_STATS = 4
 MAX_NUM_STATS = 10
 ERROR_PAUSE_TIME = 5
-OUTPUT_FILE = 'tumps.json'
+CACHE_FILE = os.path.join(os.path.dirname(__file__), '.cache')
 
 
 def query(q):
@@ -65,67 +64,100 @@ def uri_to_friendly(uri):
     return titled
     
     
+def friendly_to_filename(name):
+    lcase = name.lower()
+    unspaced = re.sub(r' ', '_', lcase)
+    safe = re.sub(r'[^0-9a-z_-]', '', unspaced)
+    return safe
+    
+    
 def format_stat(datatype, value):
-    if datatype == 'http://www.w3.org/2001/XMLSchema#date':
-        return dateutil.parser.parse(value).strftime('%d %b, %Y')
-    elif datatype == 'http://www.w3.org/2001/XMLSchema#time':
-        return dateutil.parser.parse(value).strftime('%I:%M%p')
-    elif datatype == 'http://www.w3.org/2001/XMLSchema#datetime':
-        return dateutil.parser.parse(value).strftime('%I:%M%p on %d %b, %Y')
-    elif datatype == 'http://www.w3.org/2001/XMLSchema#boolean':
-        return 'Yes' if bool(value) else 'No'
-    else:
-        return format(value, 'n')
+    if value is None or value == "":
+        return "Unknown"
+    try:
+        if datatype == 'http://www.w3.org/2001/XMLSchema#date':
+            return dateutil.parser.parse(value).strftime('%d %b, %Y')
+        elif datatype == 'http://www.w3.org/2001/XMLSchema#time':
+            return dateutil.parser.parse(value).strftime('%I:%M%p')
+        elif datatype == 'http://www.w3.org/2001/XMLSchema#datetime':
+            return dateutil.parser.parse(value).strftime('%I:%M%p on %d %b, %Y')
+        elif datatype == 'http://www.w3.org/2001/XMLSchema#boolean':
+            return 'Yes' if bool(value) else 'No'
+        else:
+            return format(float(value), 'n')
+    except ValueError as e:
+        logging.warn("Failed to parse \"{}\" as {}".format(value, datatype))
+        return str(value)
+    
+                
+def get_category():
+    if not os.path.exists(CACHE_FILE):
+        # Fetch possible categories
+        logging.info('Fetching categories')
+        results = query("""SELECT ?c COUNT(?o)
+                           WHERE
+                           {
+                               ?c a owl:Class
+                               . ?o a ?c
+                           }
+                           GROUP BY ?c
+                           HAVING ( COUNT(?o) >= %(min-deck-size)d 
+                                    && COUNT(?o) < %(max-cat-size)d )""" % {
+                                'min-deck-size': MIN_DECK_SIZE,
+                                'max-cat-size': MAX_CAT_SIZE })
+        categories = [r['c'] for r in results]
+        random.shuffle(categories)
+        with open(CACHE_FILE, 'w') as f:
+            json.dump(categories, f)
+
+    with open(CACHE_FILE, 'r') as f:
+        categories = json.load(f)
+
+    logging.info('{} categories'.format(len(categories)))    
+    cat = categories.pop(0)
+    
+    with open(CACHE_FILE, 'w') as f:
+        json.dump(categories, f)
+
+    return cat
     
 
 logging.basicConfig(level=logging.DEBUG)
-
-
-# Fetch possible categories
-logging.info('Fetching categories')
-results = query("""PREFIX owl: <http://www.w3.org/2002/07/owl#>
-                   SELECT ?c COUNT(?o)
-                   WHERE
-                   {
-                       ?c a owl:Class
-                       . ?o a ?c
-                   }
-                   GROUP BY ?c
-                   HAVING ( COUNT(?o) >= %(min-deck-size)d 
-                            && COUNT(?o) < %(max-cat-size)d )""" % {
-                        'min-deck-size': MIN_DECK_SIZE,
-                        'max-cat-size': MAX_CAT_SIZE })
-
-logging.info('{} categories'.format(len(results)))
-categories = [r['c'] for r in results]
 
 # Loop until we get a category that works
 while True:
     try:
     
         # Choose at random
-        category = random.choice(categories)
-        logging.info('{} chosen'.format(category))
+        category = {
+            'name': get_category(),
+            'friendly': None,
+            'description': None,
+            'image': None,
+        }
+        logging.info('{} chosen'.format(category['name']))
         
         # Fetch top numerical properties as the statistics
-        results = query("""PREFIX owl: <http://www.w3.org/2002/07/owl#>
-                           PREFIX ont: <http://dbpedia.org/ontology/>
-        
-                           SELECT ?p COUNT(DISTINCT ?o) GROUP_CONCAT(DISTINCT datatype(?v), "|") as ?t
+        results = query("""SELECT 
+                               ?p 
+                               COUNT(DISTINCT ?o) 
+                               GROUP_CONCAT(DISTINCT datatype(?v), "|") as ?t
                            WHERE
                            {
                                ?o a <%(category)s>
                                . ?o ?p ?v
-                               . FILTER( ( isNumeric(xsd:double(str(?v))) || datatype(?v) = xsd:date 
-                                            || datatype(?v) = xsd:time || datatype(?v) = xsd:datetime
+                               . FILTER( ( isNumeric(xsd:double(str(?v))) 
+                                            || datatype(?v) = xsd:date 
+                                            || datatype(?v) = xsd:time 
+                                            || datatype(?v) = xsd:datetime
                                             || datatype(?v) = xsd:boolean )
-                                         && ?p != ont:wikiPageID 
-                                         && ?p != ont:wikiPageRevisionID )
+                                         && ?p != dbo:wikiPageID 
+                                         && ?p != dbo:wikiPageRevisionID )
                            }
                            GROUP BY ?p
                            ORDER BY DESC(COUNT(DISTINCT ?o))
                            LIMIT %(max-num-stats)d""" % {
-                                'category': category, 
+                                'category': category['name'], 
                                 'max-num-stats': MAX_NUM_STATS })
         
         statistics = []
@@ -136,7 +168,7 @@ while True:
             statistics.append({
                 'name': result['p'], 
                 'type': next(iter(types)),
-                'friendly': uri_to_friendly(result['p']),
+                'friendly': None,
             })
             
         logging.info('{} stats'.format(len(statistics)))
@@ -146,25 +178,18 @@ while True:
             continue
         
         # Fetch ids of top category members
-        results = query("""PREFIX owl: <http://www.w3.org/2002/07/owl#>
-                           PREFIX ont: <http://dbpedia.org/ontology/>
-                           PREFIX prop: <http://dbpedia.org/property/>
-        
-                           SELECT ?o COUNT(DISTINCT ?p)
+        results = query("""SELECT ?o COUNT(DISTINCT ?p)
                            WHERE
                            {
                                 ?o a <%(category)s>
                                 . ?o ?p ?v
-                                . ?o rdfs:label ?label
-                                . ?o rdfs:comment ?comment
-                                . ?o ont:thumbnail ?thumbnail
                                 . FILTER( %(properties)s )
                             }
                             GROUP BY ?o
                             HAVING ( COUNT(DISTINCT ?p) >= %(min-num-stats)d )
                             ORDER BY DESC(COUNT(DISTINCT ?p))
                             LIMIT %(max-deck-size)d""" % {
-                               'category': category, 
+                               'category': category['name'], 
                                'properties': ' || '.join(['?p = <{}>'.format(p['name']) for p in statistics]),
                                'min-num-stats': MIN_NUM_STATS,
                                'max-deck-size': MAX_DECK_SIZE })
@@ -175,29 +200,60 @@ while True:
         if len(members) < MIN_DECK_SIZE:
             logging.info("Insufficient members: {}".format(len(members)))
             continue
-        
-        # Fetch member details
-        results = query("""PREFIX owl: <http://www.w3.org/2002/07/owl#>
-                           PREFIX ont: <http://dbpedia.org/ontology/>
-                           PREFIX prop: <http://dbpedia.org/property/>
-        
-                           SELECT 
-                               ?o 
-                               GROUP_CONCAT(DISTINCT ?label,",") as ?name
-                               GROUP_CONCAT(DISTINCT ?comment,",") as ?description
-                               GROUP_CONCAT(DISTINCT ?thumbnail,",") as ?image
-                               %(property-projections)s
+
+        # fetch category details
+        results = query("""SELECT 
+                               GROUP_CONCAT(?l, "|") as ?name 
+                               GROUP_CONCAT(?c, "|") as ?description 
+                               GROUP_CONCAT(?t, "|") as ?image
                            WHERE
                            {
-                               ?o rdfs:label ?label
-                               . ?o rdfs:comment ?comment
-                               . ?o ont:thumbnail ?thumbnail
+                               OPTIONAL { <%(category)s> rdfs:label ?l }
+                               OPTIONAL { <%(category)s> rdfs:comment ?c }
+                               OPTIONAL { <%(category)s> dbo:thumbnail ?t }
+                               FILTER ( (langMatches(lang(?l), "EN") || lang(?l) = "") 
+                                         && (langMatches(lang(?c), "EN") || lang(?c) = "") )
+                           }""" % {'category': category['name']})
+        if len(results) > 0:
+            result = results[0]
+            category['friendly'] = result['name'].split('|')[0].title() if result['name'] \
+                                        else uri_to_friendly(category['name'])
+            category['description'] = result['description'].split('|')[0] if result['description'] else None
+            category['image'] = result['image'].split('|')[0] if result['image'] else None
+        else:
+            category['friendly'] = uri_to_friendly(category['name'])
+        
+        # fetch stat details
+        results = query("""SELECT ?p GROUP_CONCAT(?l, "|") as ?name
+                           WHERE
+                           {
+                               ?p rdfs:label ?l                               
+                               . FILTER( ( %(properties)s )
+                                         && ( langMatches(lang(?l),"EN") || lang(?l) = "" ) )
+                           }
+                           GROUP BY ?p""" % {
+                               'properties': ' || '.join(['?p = <{}>'.format(p['name']) for p in statistics]) })
+                               
+        lookup = { r['p']: r['name'].split('|')[0].title() for r in results if r['name'] }
+        for s in statistics:
+            s['friendly'] = lookup.get(s['name'], uri_to_friendly(s['name']))
+                           
+        # Fetch member details
+        results = query("""SELECT 
+                               ?o 
+                               GROUP_CONCAT(DISTINCT ?label,"|") as ?name
+                               GROUP_CONCAT(DISTINCT ?comment,"|") as ?description
+                               GROUP_CONCAT(DISTINCT ?thumbnail,"|") as ?image
+                               %(property-projections)s
+                           WHERE
+                          {
+                               VALUES ?o { %(members)s }
+                               OPTIONAL { ?o rdfs:label ?label }
+                               OPTIONAL { ?o rdfs:comment ?comment }
+                               OPTIONAL { ?o dbo:thumbnail ?thumbnail }
                                %(property-joins)s
-                               FILTER( ( %(members)s )
-                                        && (langMatches(lang(?label), "EN") 
-                                           || lang(?label) = "")
-                                        && (langMatches(lang(?comment), "EN") 
-                                           || lang(?comment) = "") )
+                               FILTER( ( langMatches(lang(?label), "EN") || lang(?label) = "" )
+                                        && ( langMatches(lang(?comment), "EN") || lang(?comment) = "" ) )
                            }
                            GROUP BY ?o""" % {
                                 'property-projections': '\n'.join([
@@ -206,33 +262,34 @@ while True:
                                 'property-joins': '\n'.join([
                                     'OPTIONAL {{ ?o <{}> ?p{} }}'.format(p['name'], i)
                                     for i,p in enumerate(statistics)]), 
-                                'members': ' || '.join([
-                                    '?o = <{}>'.format(m)
+                                'members': ' '.join([
+                                    '<{}>'.format(m)
                                     for m in members] )})
         
         cards = []
         for result in results:
             cards.append({
-                'name': result['name'],
-                'description': result['description'],
-                'images': result['image'],
-                'stats': {},
+                'name': result['name'].split('|')[0].title() if result['name'] else uri_to_friendly(result['o']),
+                'description': result['description'].split('|')[0] if result['description'] else None,
+                'image': result['image'].split('|')[0] if result['image'] else None,
+                'stats': [],
             })
             for k, v in result.items():        
                 if not k.startswith('stat'):
                     continue
                 idx = int(re.sub(r'[^0-9]', '', k))
                 stat = statistics[idx]
-                cards[-1]['stats'][stat['friendly']] = format_stat(stat['type'], v)
+                cards[-1]['stats'].append((stat['friendly'], format_stat(stat['type'], v.split('|')[0])))
                 
-        deckname = uri_to_friendly(category)
         deck = {
-            'name': deckname,
+            'name': category['friendly'],
+            'description': category['description'] if category['description'] else None,
             'cards': cards,
         }
         
-        logging.info("Writing deck \"{}\" to {}".format(deckname, OUTPUT_FILE))        
-        with open(OUTPUT_FILE, 'w') as f:
+        output_file = os.path.join(os.path.dirname(__file__), 'deck-{}.json'.format(friendly_to_filename(deck['name'])))
+        logging.info("Writing deck \"{}\" to {}".format(deck['name'], output_file))        
+        with open(output_file, 'w') as f:
             json.dump(deck, f, indent=2)
         break
         
