@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """ 
-TODO: Cache failed categories
+TODO: Why so many non-numeric property values?
 TODO: Propertise that are basically the same with different names/prefixes
 TODO: Download thumbnails
 TODO: Make pdf
@@ -32,12 +32,17 @@ MIN_NUM_STATS = 4
 MAX_NUM_STATS = 10
 ERROR_PAUSE_TIME = 5
 CACHE_FILE = os.path.join(os.path.dirname(__file__), '.cache')
+IMAGE_TYPES = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/gif': 'gif',
+}
 
 
 def query(q):
     url = '{}?{}'.format(SPARQL_ENDPOINT, urlencode({
             'timeout': '30000',
-            'default-dataset-uri': DEFAULT_DATASET,
+            'default-graph-uri': DEFAULT_DATASET,
             'query': q,
             'format': 'json',    
         }))
@@ -120,6 +125,12 @@ def get_category():
         json.dump(categories, f)
 
     return cat
+
+
+def uri_to_ascii(uri):
+    return re.sub(r'[^\x20-\x7E]', 
+                  lambda m: ''.join(['%{:02x}'.format(b) for b in m.group().encode('utf-8')]), 
+                  uri)
     
 
 logging.basicConfig(level=logging.DEBUG)
@@ -286,11 +297,29 @@ while True:
             'description': category['description'] if category['description'] else None,
             'cards': cards,
         }
+
+        output_name = 'deck_{}'.format(friendly_to_filename(deck['name']))
+        output_dir = os.path.join(os.path.dirname(__file__), output_name)
+        logging.info("Writing deck \"{}\" to {}".format(deck['name'], output_dir))
+        os.mkdir(output_dir)
         
-        output_file = os.path.join(os.path.dirname(__file__), 'deck-{}.json'.format(friendly_to_filename(deck['name'])))
-        logging.info("Writing deck \"{}\" to {}".format(deck['name'], output_file))        
-        with open(output_file, 'w') as f:
-            json.dump(deck, f, indent=2)
+        for i, card in enumerate(deck['cards']):
+            if card['image'] is None:
+                continue
+            logging.debug('Downloading {}'.format(card['image']))
+            res = urlopen(uri_to_ascii(card['image']))
+            imagetype = IMAGE_TYPES[res.headers['Content-Type']]
+            imagename = 'card{:02d}.{}'.format(i, imagetype)
+            with open(os.path.join(output_dir, imagename), 'wb') as f:
+                while True:
+                    buff = res.read(1024)
+                    if not buff:
+                        break
+                    f.write(buff)
+            card['image'] = imagename
+                    
+        with open(os.path.join(output_dir, '{}.json'.format(output_name)), 'w') as f:
+            json.dump(deck, f, indent=2)        
         break
         
     except (HTTPError, URLError) as e:
