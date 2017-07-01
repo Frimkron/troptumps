@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 
 """ 
-TODO: Why so many non-numeric property values?
 TODO: Propertise that are basically the same with different names/prefixes
-TODO: Download thumbnails
 TODO: Make pdf
 """
 
@@ -37,9 +35,20 @@ IMAGE_TYPES = {
     'image/jpeg': 'jpg',
     'image/gif': 'gif',
 }
+NUMERIC_VAL_CLAUSE = "( isNumeric(xsd:double(str({0}))) " \
+                       "|| datatype({0}) = xsd:date " \
+                       "|| datatype({0}) = xsd:time " \
+                       "|| datatype({0}) = xsd:datetime " \
+                       "|| datatype({0}) = xsd:boolean ) "
+IMPLICIT_PREFIXES = {
+    'http://dbpedia.org/ontology/': 'dbo',
+    'http://dbpedia.org/property/': 'dbp',
+    'http://dbpedia.org/resource/': 'dbr',
+}
 
 
 def query(q):
+    q = re.sub(r'\n\s+', '\n', q)
     url = '{}?{}'.format(SPARQL_ENDPOINT, urlencode({
             'timeout': '30000',
             'default-graph-uri': DEFAULT_DATASET,
@@ -131,9 +140,31 @@ def uri_to_ascii(uri):
     return re.sub(r'[^\x20-\x7E]', 
                   lambda m: ''.join(['%{:02x}'.format(b) for b in m.group().encode('utf-8')]), 
                   uri)
+
+def shorten_uri(lookup, uri):
+
+    # split prefix from name
+    m = re.match(r'^(.*[/#])?([^/#]+)$', uri)
+    prefix, name = m.group(1), m.group(2)
+    
+    # if name contains reserved character, can't use prefix (due to virtuoso bug)
+    if re.search(r"[\x00-\x2c./\x3a-x40\x5b-\x5e`\x7b-\x7f-]", name):
+        return '<{}>'.format(uri)
+        
+    # add prefix to lookup if not already there
+    if prefix not in lookup:
+        lookup[prefix] = 'pf{}'.format(len(lookup))
+        
+    return '{}:{}'.format(lookup[prefix], name)
+    
+    
+def prefix_declarations(lookup):
+    return '\n'.join(['PREFIX {}: <{}>'.format(n,p) for p,n in lookup.items() 
+                      if p not in IMPLICIT_PREFIXES])
     
 
 logging.basicConfig(level=logging.DEBUG)
+prefix_lookup = dict(IMPLICIT_PREFIXES)
 
 # Loop until we get a category that works
 while True:
@@ -147,29 +178,29 @@ while True:
             'image': None,
         }
         logging.info('{} chosen'.format(category['name']))
+        shorten_uri(prefix_lookup, category['name'])
         
         # Fetch top numerical properties as the statistics
-        results = query("""SELECT 
+        results = query("""%(prefixes)s
+                           SELECT 
                                ?p 
                                COUNT(DISTINCT ?o) 
                                GROUP_CONCAT(DISTINCT datatype(?v), "|") as ?t
                            WHERE
                            {
-                               ?o a <%(category)s>
+                               ?o a %(category)s
                                . ?o ?p ?v
-                               . FILTER( ( isNumeric(xsd:double(str(?v))) 
-                                            || datatype(?v) = xsd:date 
-                                            || datatype(?v) = xsd:time 
-                                            || datatype(?v) = xsd:datetime
-                                            || datatype(?v) = xsd:boolean )
+                               . FILTER( %(numeric-clause)s
                                          && ?p != dbo:wikiPageID 
                                          && ?p != dbo:wikiPageRevisionID )
                            }
                            GROUP BY ?p
                            ORDER BY DESC(COUNT(DISTINCT ?o))
                            LIMIT %(max-num-stats)d""" % {
-                                'category': category['name'], 
-                                'max-num-stats': MAX_NUM_STATS })
+                                'prefixes': prefix_declarations(prefix_lookup),
+                                'category': shorten_uri(prefix_lookup, category['name']), 
+                                'max-num-stats': MAX_NUM_STATS,
+                                'numeric-clause': NUMERIC_VAL_CLAUSE.format('?v') })
         
         statistics = []
         for result in results:
@@ -183,48 +214,59 @@ while True:
             })
             
         logging.info('{} stats'.format(len(statistics)))
+        for s in statistics:
+            shorten_uri(prefix_lookup, s['name'])
         
         if len(statistics) < MIN_NUM_STATS:
             logging.info("Insufficient stats: {}".format(len(statistics)))
             continue
         
         # Fetch ids of top category members
-        results = query("""SELECT ?o COUNT(DISTINCT ?p)
+        results = query("""%(prefixes)s
+                           SELECT ?o COUNT(DISTINCT ?p)
                            WHERE
                            {
-                                ?o a <%(category)s>
+                                ?o a %(category)s
                                 . ?o ?p ?v
-                                . FILTER( %(properties)s )
+                                . FILTER( ( %(properties)s ) 
+                                          && %(numeric-clause)s )
                             }
                             GROUP BY ?o
                             HAVING ( COUNT(DISTINCT ?p) >= %(min-num-stats)d )
                             ORDER BY DESC(COUNT(DISTINCT ?p))
                             LIMIT %(max-deck-size)d""" % {
-                               'category': category['name'], 
-                               'properties': ' || '.join(['?p = <{}>'.format(p['name']) for p in statistics]),
+                               'prefixes': prefix_declarations(prefix_lookup),
+                               'category': shorten_uri(prefix_lookup, category['name']), 
+                               'properties': ' || '.join([
+                                    '?p = {}'.format(shorten_uri(prefix_lookup,p['name'])) for p in statistics]),
                                'min-num-stats': MIN_NUM_STATS,
-                               'max-deck-size': MAX_DECK_SIZE })
+                               'max-deck-size': MAX_DECK_SIZE,
+                               'numeric-clause': NUMERIC_VAL_CLAUSE.format('?v') })
         
         members = [ b['o'] for b in results ]
         logging.info('{} members'.format(len(members)))
+        for m in members:
+            shorten_uri(prefix_lookup, m)
         
         if len(members) < MIN_DECK_SIZE:
             logging.info("Insufficient members: {}".format(len(members)))
             continue
 
         # fetch category details
-        results = query("""SELECT 
+        results = query("""%(prefixes)s
+                           SELECT 
                                GROUP_CONCAT(?l, "|") as ?name 
                                GROUP_CONCAT(?c, "|") as ?description 
                                GROUP_CONCAT(?t, "|") as ?image
                            WHERE
                            {
-                               OPTIONAL { <%(category)s> rdfs:label ?l }
-                               OPTIONAL { <%(category)s> rdfs:comment ?c }
-                               OPTIONAL { <%(category)s> dbo:thumbnail ?t }
+                               OPTIONAL { %(category)s rdfs:label ?l }
+                               OPTIONAL { %(category)s rdfs:comment ?c }
+                               OPTIONAL { %(category)s dbo:thumbnail ?t }
                                FILTER ( (langMatches(lang(?l), "EN") || lang(?l) = "") 
                                          && (langMatches(lang(?c), "EN") || lang(?c) = "") )
-                           }""" % {'category': category['name']})
+                           }""" % { 'prefixes': prefix_declarations(prefix_lookup),
+                                    'category': shorten_uri(prefix_lookup, category['name'])})
         if len(results) > 0:
             result = results[0]
             category['friendly'] = result['name'].split('|')[0].title() if result['name'] \
@@ -235,7 +277,8 @@ while True:
             category['friendly'] = uri_to_friendly(category['name'])
         
         # fetch stat details
-        results = query("""SELECT ?p GROUP_CONCAT(?l, "|") as ?name
+        results = query("""%(prefixes)s
+                           SELECT ?p GROUP_CONCAT(?l, "|") as ?name
                            WHERE
                            {
                                ?p rdfs:label ?l                               
@@ -243,14 +286,17 @@ while True:
                                          && ( langMatches(lang(?l),"EN") || lang(?l) = "" ) )
                            }
                            GROUP BY ?p""" % {
-                               'properties': ' || '.join(['?p = <{}>'.format(p['name']) for p in statistics]) })
+                               'prefixes': prefix_declarations(prefix_lookup),
+                               'properties': ' || '.join([
+                                    '?p = {}'.format(shorten_uri(prefix_lookup, p['name'])) for p in statistics]) })
                                
         lookup = { r['p']: r['name'].split('|')[0].title() for r in results if r['name'] }
         for s in statistics:
             s['friendly'] = lookup.get(s['name'], uri_to_friendly(s['name']))
                            
         # Fetch member details
-        results = query("""SELECT 
+        results = query("""%(prefixes)s
+                           SELECT 
                                ?o 
                                GROUP_CONCAT(DISTINCT ?label,"|") as ?name
                                GROUP_CONCAT(DISTINCT ?comment,"|") as ?description
@@ -267,14 +313,17 @@ while True:
                                         && ( langMatches(lang(?comment), "EN") || lang(?comment) = "" ) )
                            }
                            GROUP BY ?o""" % {
+                                'prefixes': prefix_declarations(prefix_lookup),
                                 'property-projections': '\n'.join([
                                     'GROUP_CONCAT(DISTINCT ?p{}, "|") as ?stat{}'.format(i, i) 
                                     for i,p in enumerate(statistics)]),
                                 'property-joins': '\n'.join([
-                                    'OPTIONAL {{ ?o <{}> ?p{} }}'.format(p['name'], i)
+                                    'OPTIONAL {{ ?o {} ?p{} . FILTER {} }}'.format(
+                                        shorten_uri(prefix_lookup, p['name']), i, 
+                                        NUMERIC_VAL_CLAUSE.format('?p{}'.format(i)))
                                     for i,p in enumerate(statistics)]), 
                                 'members': ' '.join([
-                                    '<{}>'.format(m)
+                                    '{}'.format(shorten_uri(prefix_lookup, m))
                                     for m in members] )})
         
         cards = []
@@ -290,11 +339,12 @@ while True:
                     continue
                 idx = int(re.sub(r'[^0-9]', '', k))
                 stat = statistics[idx]
-                cards[-1]['stats'].append((stat['friendly'], format_stat(stat['type'], v.split('|')[0])))
+                cards[-1]['stats'].append(format_stat(stat['type'], v.split('|')[0]))
                 
         deck = {
             'name': category['friendly'],
             'description': category['description'] if category['description'] else None,
+            'stats': [s['friendly'] for s in statistics],
             'cards': cards,
         }
 
