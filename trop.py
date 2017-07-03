@@ -15,7 +15,11 @@ import codecs
 import json
 import random
 import pprint
+import argparse
 import dateutil.parser
+from reportlab.pdfgen import canvas
+from reportlab.lib import pagesizes
+from reportlab.lib.units import mm
 from datetime import datetime
 from urllib.request import urlopen, Request, HTTPError, URLError
 from urllib.parse import urlencode
@@ -45,6 +49,10 @@ IMPLICIT_PREFIXES = {
     'http://dbpedia.org/property/': 'dbp',
     'http://dbpedia.org/resource/': 'dbr',
 }
+PAGE_MARGIN = 10*mm
+CARD_SIZE = 63.5*mm, 88.9*mm
+CARD_TEXT_SIZE = 2.5*mm
+CARD_MARGIN = 5*mm
 
 
 def query(q):
@@ -163,11 +171,41 @@ def prefix_declarations(lookup):
                       if p not in IMPLICIT_PREFIXES])
     
 
-logging.basicConfig(level=logging.DEBUG)
-prefix_lookup = dict(IMPLICIT_PREFIXES)
+def grid_size(pagesize):
+    return int((pagesize[0]-PAGE_MARGIN*2)/CARD_SIZE[0]), int((pagesize[1]-PAGE_MARGIN*2)/CARD_SIZE[1])
+    
+    
+def card_canv_itr(c, pagesize):
+    gridsize = grid_size(pagesize)
+    while True:
+        c.translate(PAGE_MARGIN, pagesize[1]-PAGE_MARGIN)
+        c.saveState()
+        for j in range(gridsize[1]):
+            for i in range(gridsize[0]):
+                c.translate(CARD_SIZE[0]*i, -CARD_SIZE[1]*j)
+                c.setStrokeColorRGB(0.0, 0.0, 0.0)
+                c.setLineWidth(1*mm)
+                c.rect(0.0, 0.0, CARD_SIZE[0], -CARD_SIZE[1], stroke=1, fill=0)
+                c.translate(CARD_MARGIN, -CARD_MARGIN)
+                yield
+                c.restoreState()
+                c.saveState()
+        c.showPage()
+            
+    
+ap = argparse.ArgumentParser()
+ap.add_argument('-d','--datadir')
+ap.add_argument('-l','--loglevel',choices=('debug','info','warn','error','fatal'),default='info')
+ap.add_argument('-p','--pagesize',choices=[s.lower() for s in dir(pagesizes) if re.match(r'[A-Z]',s)], default='a4')
+args = ap.parse_args()
+    
 
+logging.basicConfig(level=getattr(logging,args.loglevel.upper()))
+input_dir = args.datadir
+prefix_lookup = dict(IMPLICIT_PREFIXES)
+    
 # Loop until we get a category that works
-while True:
+while not input_dir:
     try:
     
         # Choose at random
@@ -367,13 +405,55 @@ while True:
                         break
                     f.write(buff)
             card['image'] = imagename
-                    
+           
+        logging.debug("writing json file")         
         with open(os.path.join(output_dir, '{}.json'.format(output_name)), 'w') as f:
-            json.dump(deck, f, indent=2)        
-        break
+            json.dump(deck, f, indent=2)
+        
+        # exit condition - we're done
+        input_dir = output_dir
         
     except (HTTPError, URLError) as e:
         logging.error(e)
         logging.debug("Pausing for {}s".format(ERROR_PAUSE_TIME))
         time.sleep(ERROR_PAUSE_TIME)
         continue
+        
+# read deck data
+input_name = os.path.basename(input_dir)
+with open(os.path.join(input_dir, '{}.json'.format(input_name)), 'r') as f:
+    deck = json.load(f)
+
+logging.info("Generating PDF")
+output_dir = input_dir
+output_name = input_name
+
+# establish if portrait or landscape better
+pagesize = getattr(pagesizes, args.pagesize.upper())
+pt_gridsize = grid_size(pagesizes.portrait(pagesize))
+ls_gridsize = grid_size(pagesizes.landscape(pagesize))
+if pt_gridsize[0]*pt_gridsize[1] > ls_gridsize[0]*ls_gridsize[1]:
+    pagesize = pagesizes.portrait(pagesize)
+else:
+    pagesize = pagesizes.landscape(pagesize)
+    
+canv = canvas.Canvas(os.path.join(output_dir, '{}.pdf'.format(output_name)), pagesize=pagesize)
+canv_itr = card_canv_itr(canv, pagesize)
+
+# title card
+next(canv_itr)
+canv.drawString(0*mm, -0*mm, deck['name'])
+if deck['description']:
+    canv.drawString(0*mm, -10*mm, deck['description'])
+
+# cards
+for card in deck['cards']:
+    next(canv_itr)
+    canv.drawString(0*mm, -0*mm, card['name'])
+    if card['description']: 
+        canv.drawString(0*mm, -10*mm, card['description'])
+    if card['image']:
+        canv.drawImage(os.path.join(input_dir, card['image']), 0*mm, -20*mm, CARD_SIZE[0]-CARD_MARGIN*2,
+                       -(CARD_SIZE[1]-CARD_MARGIN*2)/3, preserveAspectRatio=True)
+                        
+canv.save()
