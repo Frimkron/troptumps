@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """ 
-TODO: Propertise that are basically the same with different names/prefixes
+TODO: Properties that are basically the same with different names/prefixes
 TODO: Make pdf
 """
 
@@ -18,8 +18,10 @@ import pprint
 import argparse
 import dateutil.parser
 from reportlab.pdfgen import canvas
+from reportlab import platypus
 from reportlab.lib import pagesizes
 from reportlab.lib.units import mm
+from reportlab.lib import styles
 from datetime import datetime
 from urllib.request import urlopen, Request, HTTPError, URLError
 from urllib.parse import urlencode
@@ -52,7 +54,8 @@ IMPLICIT_PREFIXES = {
 PAGE_MARGIN = 10*mm
 CARD_SIZE = 63.5*mm, 88.9*mm
 CARD_TEXT_SIZE = 2.5*mm
-CARD_MARGIN = 5*mm
+CARD_MARGIN = 3*mm
+CARD_LINE_SPACING = 1.1
 
 
 def query(q):
@@ -170,6 +173,28 @@ def prefix_declarations(lookup):
     return '\n'.join(['PREFIX {}: <{}>'.format(n,p) for p,n in lookup.items() 
                       if p not in IMPLICIT_PREFIXES])
     
+    
+def first_sentence(para):
+    return ''.join(re.split(r"(?<=\w)([.!?]) +(?=\w)", para, 1)[:2])
+    
+
+def pluralise(name):
+    rules = [
+        (('ium','tum','lum','ion'), 2, 'a'),
+        (('ula','mna','nna','rva','tia'), None, 'e'),
+        (('ay','ey','iy','oy','uy'), None, 's'),
+        ('is', 2, 'es'),
+        (('us','um'), 2, 'i'),
+        (('ex','ix'), 2, 'ices'),
+        ('ni', None, ''),
+        ('y', 1, 'ies'),
+        (('s','x','ch','sh'), None, 'es'),
+    ]
+    for suff,back,repl in rules:
+        if name.endswith(suff):
+            return name[:-back]+repl
+    return name+'s'
+
 
 def grid_size(pagesize):
     return int((pagesize[0]-PAGE_MARGIN*2)/CARD_SIZE[0]), int((pagesize[1]-PAGE_MARGIN*2)/CARD_SIZE[1])
@@ -307,12 +332,14 @@ while not input_dir:
                                     'category': shorten_uri(prefix_lookup, category['name'])})
         if len(results) > 0:
             result = results[0]
-            category['friendly'] = result['name'].split('|')[0].title() if result['name'] \
-                                        else uri_to_friendly(category['name'])
-            category['description'] = result['description'].split('|')[0] if result['description'] else None
-            category['image'] = result['image'].split('|')[0] if result['image'] else None
+            category['friendly'] = pluralise(result['name'].split('|')[0].title()
+                                             if result['name'] else uri_to_friendly(category['name']))
+            category['description'] = first_sentence(result['description'].split('|')[0]) \
+                                        if result['description'] else None
+            category['image'] = result['image'].split('|')[0] \
+                                        if result['image'] else None
         else:
-            category['friendly'] = uri_to_friendly(category['name'])
+            category['friendly'] = pluralise(uri_to_friendly(category['name']))
         
         # fetch stat details
         results = query("""%(prefixes)s
@@ -368,7 +395,7 @@ while not input_dir:
         for result in results:
             cards.append({
                 'name': result['name'].split('|')[0].title() if result['name'] else uri_to_friendly(result['o']),
-                'description': result['description'].split('|')[0] if result['description'] else None,
+                'description': first_sentence(result['description'].split('|')[0]) if result['description'] else None,
                 'image': result['image'].split('|')[0] if result['image'] else None,
                 'stats': [],
             })
@@ -437,23 +464,36 @@ if pt_gridsize[0]*pt_gridsize[1] > ls_gridsize[0]*ls_gridsize[1]:
 else:
     pagesize = pagesizes.landscape(pagesize)
     
+text_style = styles.ParagraphStyle('style', fontName='Helvetica', fontSize=CARD_TEXT_SIZE, 
+                                   leading=CARD_TEXT_SIZE*CARD_LINE_SPACING)
+    
 canv = canvas.Canvas(os.path.join(output_dir, '{}.pdf'.format(output_name)), pagesize=pagesize)
 canv_itr = card_canv_itr(canv, pagesize)
+facesize = CARD_SIZE[0]-CARD_MARGIN*2, CARD_SIZE[1]-CARD_MARGIN*2
 
 # title card
 next(canv_itr)
-canv.drawString(0*mm, -0*mm, deck['name'])
-if deck['description']:
-    canv.drawString(0*mm, -10*mm, deck['description'])
+title = platypus.Paragraph(deck['name'], text_style)
+desc  = platypus.Paragraph(deck['description'], text_style) if deck['description'] else None
+tbl = platypus.Table([[title],[desc]])
+tblsize = tbl.wrap(*facesize)
+tbl.wrapOn(canv, *facesize)
+tbl.drawOn(canv, 0,-tblsize[1])
 
 # cards
-for card in deck['cards']:
+for card in deck['cards']:    
     next(canv_itr)
-    canv.drawString(0*mm, -0*mm, card['name'])
-    if card['description']: 
-        canv.drawString(0*mm, -10*mm, card['description'])
-    if card['image']:
-        canv.drawImage(os.path.join(input_dir, card['image']), 0*mm, -20*mm, CARD_SIZE[0]-CARD_MARGIN*2,
-                       -(CARD_SIZE[1]-CARD_MARGIN*2)/3, preserveAspectRatio=True)
+    title = platypus.Paragraph(card['name'], text_style)
+    img = platypus.Image(os.path.join(output_dir, card['image']), facesize[0], facesize[1]/3.0, kind='proportional') \
+            if card['image'] else None
+    desc = platypus.Paragraph(card['description'], text_style) if card['description'] else None
+    stattbl = platypus.Table([ [platypus.Paragraph(deck['stats'][i], text_style), 
+                                platypus.Paragraph(card['stats'][i], text_style)]
+                              for i in range(len(deck['stats'])) ], 
+                             rowHeights=CARD_TEXT_SIZE*CARD_LINE_SPACING, colWidths=(None, facesize[0]/3.0))
+    tbl = platypus.Table([[title],[img],[desc],[stattbl]])
+    tblsize = tbl.wrap(*facesize)
+    tbl.wrapOn(canv, *facesize)
+    tbl.drawOn(canv, 0, -tblsize[1])
                         
 canv.save()
