@@ -3,6 +3,16 @@
 """ 
 TODO: Properties that are basically the same with different names/prefixes
 TODO: Make pdf
+    TODO: fix weird stat table valign
+    TODO: full width stat table
+    TODO: title card description width
+    TODO: unicode font
+    TODO: colours
+    TODO: card numbering
+    TODO: credits on title card
+    TODO: card backs
+TODO: Can post instead of get to avoid max uri length?
+TODO: Don't abort on thumbnail 404
 """
 
 import os
@@ -51,11 +61,17 @@ IMPLICIT_PREFIXES = {
     'http://dbpedia.org/property/': 'dbp',
     'http://dbpedia.org/resource/': 'dbr',
 }
+GOLDEN_RATIO = 0.617
 PAGE_MARGIN = 10*mm
 CARD_SIZE = 63.5*mm, 88.9*mm
 CARD_TEXT_SIZE = 2.5*mm
+CARD_TITLE_SIZE = 3.5*mm
 CARD_MARGIN = 3*mm
 CARD_LINE_SPACING = 1.1
+CARD_SECTION_PROPS = 0.75, 2, 2, 3
+DECK_TITLE_SIZE = 8*mm
+DECK_PRETITLE_SIZE = 6*mm
+CARD_STAT_SPACING = 1.2
 
 
 def query(q):
@@ -463,9 +479,30 @@ if pt_gridsize[0]*pt_gridsize[1] > ls_gridsize[0]*ls_gridsize[1]:
     pagesize = pagesizes.portrait(pagesize)
 else:
     pagesize = pagesizes.landscape(pagesize)
-    
-text_style = styles.ParagraphStyle('style', fontName='Helvetica', fontSize=CARD_TEXT_SIZE, 
+
+prefront_style = styles.ParagraphStyle('prefront-style', fontName='Helvetica', fontSize = DECK_PRETITLE_SIZE,
+                                        alignment=styles.TA_CENTER)
+front_style = styles.ParagraphStyle('front-style', fontName='Helvetica', fontSize=DECK_TITLE_SIZE,
+                                    alignment=styles.TA_CENTER, leading=DECK_TITLE_SIZE*CARD_LINE_SPACING)
+title_style = styles.ParagraphStyle('title-style', fontName='Helvetica', fontSize=CARD_TITLE_SIZE, 
+                                    alignment=styles.TA_CENTER)
+desc_style = styles.ParagraphStyle('desc-style', fontName='Helvetica', fontSize=CARD_TEXT_SIZE, 
                                    leading=CARD_TEXT_SIZE*CARD_LINE_SPACING)
+stat_style = styles.ParagraphStyle('stat-style', fontName='Helvetica', fontSize=CARD_TEXT_SIZE,
+                                   leading=CARD_TEXT_SIZE*CARD_LINE_SPACING)
+tbl_style = platypus.TableStyle([('ALIGN',(0,0),(0,1),'CENTER'),
+                                 ('ALIGN',(0,3),(-1,-1),'CENTER'),
+                                 ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+                                 ('ROWBACKGROUNDS',(0,0),(-1,-1),[(0.9,0.9,0.9),(0.8,0.8,0.8)]),
+                                 ('TOPPADDING',(0,0),(-1,-1),0),
+                                 ('BOTTOMPADDING',(0,0),(-1,-1),0),
+                                 ('LEFTPADDING',(0,0),(-1,-1),0),
+                                 ('RIGHTPADDING',(0,0),(-1,-1),0)])
+stat_tbl_style = platypus.TableStyle([('ALIGN',(0,0),(0,-1),'LEFT'),
+                                      ('ALIGN',(1,0),(1,-1),'RIGHT'),
+                                      ('FONTNAME',(0,0),(-1,-1),'Helvetica'),
+                                      ('FONTSIZE',(0,0),(-1,-1),CARD_TEXT_SIZE),
+                                      ('ROWBACKGROUNDS',(0,0),(-1,-1),[(1.0,1.0,1.0),(0.8,0.8,0.8)])])
     
 canv = canvas.Canvas(os.path.join(output_dir, '{}.pdf'.format(output_name)), pagesize=pagesize)
 canv_itr = card_canv_itr(canv, pagesize)
@@ -473,25 +510,30 @@ facesize = CARD_SIZE[0]-CARD_MARGIN*2, CARD_SIZE[1]-CARD_MARGIN*2
 
 # title card
 next(canv_itr)
-title = platypus.Paragraph(deck['name'], text_style)
-desc  = platypus.Paragraph(deck['description'], text_style) if deck['description'] else None
-tbl = platypus.Table([[title],[desc]])
+pretitle = platypus.Paragraph('<i>Trop tumps</i>', prefront_style)
+title = platypus.Paragraph(deck['name'], front_style)
+desc  = platypus.Paragraph(deck['description'], desc_style) if deck['description'] else None
+tbl = platypus.Table([[pretitle],[title],[desc]])
 tblsize = tbl.wrap(*facesize)
 tbl.wrapOn(canv, *facesize)
-tbl.drawOn(canv, 0,-tblsize[1])
+tbl.drawOn(canv, 0,-facesize[1]*(1-GOLDEN_RATIO)-tblsize[1]/2)
 
 # cards
 for card in deck['cards']:    
     next(canv_itr)
-    title = platypus.Paragraph(card['name'], text_style)
-    img = platypus.Image(os.path.join(output_dir, card['image']), facesize[0], facesize[1]/3.0, kind='proportional') \
-            if card['image'] else None
-    desc = platypus.Paragraph(card['description'], text_style) if card['description'] else None
-    stattbl = platypus.Table([ [platypus.Paragraph(deck['stats'][i], text_style), 
-                                platypus.Paragraph(card['stats'][i], text_style)]
+    title = platypus.Paragraph(card['name'], title_style)
+    img = platypus.Image(os.path.join(output_dir, card['image']), facesize[0], 
+                         facesize[1]*(CARD_SECTION_PROPS[1]/sum(CARD_SECTION_PROPS)), 
+                         kind='proportional') if card['image'] else None
+    desc = platypus.Paragraph(card['description'], desc_style) if card['description'] else None
+    stattbl = platypus.Table([ [deck['stats'][i], card['stats'][i]]
                               for i in range(len(deck['stats'])) ], 
-                             rowHeights=CARD_TEXT_SIZE*CARD_LINE_SPACING, colWidths=(None, facesize[0]/3.0))
-    tbl = platypus.Table([[title],[img],[desc],[stattbl]])
+                             rowHeights=CARD_TEXT_SIZE*CARD_STAT_SPACING, colWidths=(None, facesize[0]/3.0),
+                             spaceBefore=0, spaceAfter=0)
+    stattbl.setStyle(stat_tbl_style)
+    tbl = platypus.Table([[title],[img],[desc],[stattbl]], 
+                         rowHeights=[facesize[1]*(p/sum(CARD_SECTION_PROPS)) for p in CARD_SECTION_PROPS])
+    tbl.setStyle(tbl_style)
     tblsize = tbl.wrap(*facesize)
     tbl.wrapOn(canv, *facesize)
     tbl.drawOn(canv, 0, -tblsize[1])
