@@ -3,16 +3,14 @@
 """ 
 TODO: Properties that are basically the same with different names/prefixes
 TODO: Make pdf
-    TODO: fix weird stat table valign
-    TODO: full width stat table
-    TODO: title card description width
     TODO: unicode font
     TODO: colours
     TODO: card numbering
     TODO: credits on title card
     TODO: card backs
-TODO: Can post instead of get to avoid max uri length?
-TODO: Don't abort on thumbnail 404
+TODO: At least fix middle initials as end of sentences
+TODO: Can post instead of get to avoid max uri length? (it would appear not) 
+TODO: Don't abort on thumbnail 404 (test)
 """
 
 import os
@@ -32,6 +30,9 @@ from reportlab import platypus
 from reportlab.lib import pagesizes
 from reportlab.lib.units import mm
 from reportlab.lib import styles
+from reportlab.lib import colors
+from reportlab.pdfbase import ttfonts
+from reportlab.pdfbase import pdfmetrics
 from datetime import datetime
 from urllib.request import urlopen, Request, HTTPError, URLError
 from urllib.parse import urlencode
@@ -61,6 +62,11 @@ IMPLICIT_PREFIXES = {
     'http://dbpedia.org/property/': 'dbp',
     'http://dbpedia.org/resource/': 'dbr',
 }
+FONT_NAMES = { 'family': 'Ubuntu',
+               'regular': 'Ubuntu-R', 
+               'italic': 'Ubuntu-RI',
+               'bold': 'Ubuntu-B', 
+               'bolditalic': 'Ubuntu-BI' }
 GOLDEN_RATIO = 0.617
 PAGE_MARGIN = 10*mm
 CARD_SIZE = 63.5*mm, 88.9*mm
@@ -68,10 +74,14 @@ CARD_TEXT_SIZE = 2.5*mm
 CARD_TITLE_SIZE = 3.5*mm
 CARD_MARGIN = 3*mm
 CARD_LINE_SPACING = 1.1
-CARD_SECTION_PROPS = 0.75, 2, 2, 3
+CARD_SECTION_PROPS = 0.75, 2, 1.75, 3.5
 DECK_TITLE_SIZE = 8*mm
 DECK_PRETITLE_SIZE = 6*mm
-CARD_STAT_SPACING = 1.2
+CARD_STAT_SPACING = 1.3
+CARD_PRIMARY_COLOUR = colors.HexColor('#FFDC19')
+CARD_SECONDARY_COLOUR = colors.HexColor('#F7F7F7')
+CARD_TEXT_COLOUR = colors.HexColor('#1C1C1C')
+CARD_OUTLINE_COLOUR = colors.HexColor('#845A23')
 
 
 def query(q):
@@ -224,9 +234,10 @@ def card_canv_itr(c, pagesize):
         for j in range(gridsize[1]):
             for i in range(gridsize[0]):
                 c.translate(CARD_SIZE[0]*i, -CARD_SIZE[1]*j)
-                c.setStrokeColorRGB(0.0, 0.0, 0.0)
+                c.setStrokeColorRGB(*CARD_OUTLINE_COLOUR.rgb())
                 c.setLineWidth(1*mm)
-                c.rect(0.0, 0.0, CARD_SIZE[0], -CARD_SIZE[1], stroke=1, fill=0)
+                c.setFillColorRGB(*CARD_PRIMARY_COLOUR.rgb())
+                c.rect(0.0, 0.0, CARD_SIZE[0], -CARD_SIZE[1], stroke=1, fill=1)
                 c.translate(CARD_MARGIN, -CARD_MARGIN)
                 yield
                 c.restoreState()
@@ -438,7 +449,12 @@ while not input_dir:
             if card['image'] is None:
                 continue
             logging.debug('Downloading {}'.format(card['image']))
-            res = urlopen(uri_to_ascii(card['image']))
+            try:
+                res = urlopen(uri_to_ascii(card['image']))
+            except HTTPError as e:
+                if e.getcode() == 404:
+                    continue
+                raise
             imagetype = IMAGE_TYPES[res.headers['Content-Type']]
             imagename = 'card{:02d}.{}'.format(i, imagetype)
             with open(os.path.join(output_dir, imagename), 'wb') as f:
@@ -480,29 +496,45 @@ if pt_gridsize[0]*pt_gridsize[1] > ls_gridsize[0]*ls_gridsize[1]:
 else:
     pagesize = pagesizes.landscape(pagesize)
 
+# load font
+#ffam = FONT_NAMES['family']
+#freg = FONT_NAMES.get('regular',ffam)
+#fbld = FONT_NAMES.get('bold',freg)
+#fitl = FONT_NAMES.get('italic',freg)
+#fbitl = FONT_NAMES.get('bolditalic',fbld)
+#for fname in set([freg, fbld, fitl, fbitl]):
+#    pdfmetrics.registerFont(ttfonts.TTFont(fname, fname+'.ttf'))
+#pdfmetrics.registerFontFamily(freg, normal=freg, bold=fbld, italic=fitl, boldItalic=fbitl)
+
 prefront_style = styles.ParagraphStyle('prefront-style', fontName='Helvetica', fontSize = DECK_PRETITLE_SIZE,
                                         alignment=styles.TA_CENTER)
 front_style = styles.ParagraphStyle('front-style', fontName='Helvetica', fontSize=DECK_TITLE_SIZE,
                                     alignment=styles.TA_CENTER, leading=DECK_TITLE_SIZE*CARD_LINE_SPACING)
 title_style = styles.ParagraphStyle('title-style', fontName='Helvetica', fontSize=CARD_TITLE_SIZE, 
-                                    alignment=styles.TA_CENTER)
+                                    alignment=styles.TA_CENTER, textColor=CARD_TEXT_COLOUR)
 desc_style = styles.ParagraphStyle('desc-style', fontName='Helvetica', fontSize=CARD_TEXT_SIZE, 
-                                   leading=CARD_TEXT_SIZE*CARD_LINE_SPACING)
-stat_style = styles.ParagraphStyle('stat-style', fontName='Helvetica', fontSize=CARD_TEXT_SIZE,
-                                   leading=CARD_TEXT_SIZE*CARD_LINE_SPACING)
+                                   leading=CARD_TEXT_SIZE*CARD_LINE_SPACING, textColor=CARD_TEXT_COLOUR)
 tbl_style = platypus.TableStyle([('ALIGN',(0,0),(0,1),'CENTER'),
                                  ('ALIGN',(0,3),(-1,-1),'CENTER'),
                                  ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
-                                 ('ROWBACKGROUNDS',(0,0),(-1,-1),[(0.9,0.9,0.9),(0.8,0.8,0.8)]),
+                                 #('ROWBACKGROUNDS',(0,0),(-1,-1),[(0.9,0.9,0.9),(0.8,0.8,0.8)]),
                                  ('TOPPADDING',(0,0),(-1,-1),0),
                                  ('BOTTOMPADDING',(0,0),(-1,-1),0),
-                                 ('LEFTPADDING',(0,0),(-1,-1),0),
-                                 ('RIGHTPADDING',(0,0),(-1,-1),0)])
+                                 ('LEFTPADDING',(0,0),(0,-2),3*mm),
+                                 ('RIGHTPADDING',(0,0),(0,-2),3*mm),
+                                 ('LEFTPADDING',(0,-1),(0,-1),0),
+                                 ('RIGHTPADDING',(0,-1),(0,-1),0)])
 stat_tbl_style = platypus.TableStyle([('ALIGN',(0,0),(0,-1),'LEFT'),
                                       ('ALIGN',(1,0),(1,-1),'RIGHT'),
                                       ('FONTNAME',(0,0),(-1,-1),'Helvetica'),
                                       ('FONTSIZE',(0,0),(-1,-1),CARD_TEXT_SIZE),
-                                      ('ROWBACKGROUNDS',(0,0),(-1,-1),[(1.0,1.0,1.0),(0.8,0.8,0.8)])])
+                                      #('ROWBACKGROUNDS',(0,0),(-1,-1),[(1.0,1.0,1.0),(0.8,0.8,0.8)]),
+                                      ('LEFTPADDING',(0,0),(-1,-1),2*mm),
+                                      ('RIGHTPADDING',(0,0),(-1,-1),2*mm),
+                                      ('TOPPADDING',(0,0),(-1,-1),0),
+                                      ('BOTTOMPADDING',(0,0),(-1,-1),0),
+                                      ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+                                      ('LEADING',(0,0),(-1,-1),CARD_TEXT_SIZE)])
     
 canv = canvas.Canvas(os.path.join(output_dir, '{}.pdf'.format(output_name)), pagesize=pagesize)
 canv_itr = card_canv_itr(canv, pagesize)
