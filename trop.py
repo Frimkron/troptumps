@@ -4,10 +4,9 @@
 TODO: Properties that are basically the same with different names/prefixes
 TODO: Make pdf
     TODO: unicode font
-    TODO: colours
-    TODO: card numbering
     TODO: credits on title card
     TODO: card backs
+        TODO: how do printers handle double-sided?
 TODO: At least fix middle initials as end of sentences
 TODO: Can post instead of get to avoid max uri length? (it would appear not) 
 TODO: Don't abort on thumbnail 404 (test)
@@ -71,6 +70,7 @@ GOLDEN_RATIO = 0.617
 PAGE_MARGIN = 10*mm
 CARD_SIZE = 63.5*mm, 88.9*mm
 CARD_TEXT_SIZE = 2.5*mm
+CARD_SMALLPRINT_SIZE = 2*mm
 CARD_TITLE_SIZE = 3.5*mm
 CARD_MARGIN = 3*mm
 CARD_LINE_SPACING = 1.1
@@ -78,10 +78,10 @@ CARD_SECTION_PROPS = 0.75, 2, 1.75, 3.5
 DECK_TITLE_SIZE = 8*mm
 DECK_PRETITLE_SIZE = 6*mm
 CARD_STAT_SPACING = 1.3
-CARD_PRIMARY_COLOUR = colors.HexColor('#FFDC19')
-CARD_SECONDARY_COLOUR = colors.HexColor('#F7F7F7')
-CARD_TEXT_COLOUR = colors.HexColor('#1C1C1C')
-CARD_OUTLINE_COLOUR = colors.HexColor('#845A23')
+CARD_PRIMARY_HSL = 1/6.0, 0.8, 0.5
+CARD_BOX_HSL_1 = 0.0, 0.0, 0.9
+CARD_BOX_HSL_2 = 0.0, 0.0, 0.8
+CARD_TEXT_HSL = 0.0, 0.0, 0.1
 
 
 def query(q):
@@ -228,15 +228,18 @@ def grid_size(pagesize):
     
 def card_canv_itr(c, pagesize):
     gridsize = grid_size(pagesize)
+    olh,ols,oll = list(CARD_PRIMARY_HSL)
+    oll = (oll+0.5) % 1.0
+    outline_hsl = olh,ols,oll
     while True:
         c.translate(PAGE_MARGIN, pagesize[1]-PAGE_MARGIN)
         c.saveState()
         for j in range(gridsize[1]):
             for i in range(gridsize[0]):
                 c.translate(CARD_SIZE[0]*i, -CARD_SIZE[1]*j)
-                c.setStrokeColorRGB(*CARD_OUTLINE_COLOUR.rgb())
+                c.setStrokeColorRGB(*colors.hsl2rgb(*outline_hsl))
                 c.setLineWidth(1*mm)
-                c.setFillColorRGB(*CARD_PRIMARY_COLOUR.rgb())
+                c.setFillColorRGB(*colors.hsl2rgb(*CARD_PRIMARY_HSL))
                 c.rect(0.0, 0.0, CARD_SIZE[0], -CARD_SIZE[1], stroke=1, fill=1)
                 c.translate(CARD_MARGIN, -CARD_MARGIN)
                 yield
@@ -246,9 +249,14 @@ def card_canv_itr(c, pagesize):
             
     
 ap = argparse.ArgumentParser()
-ap.add_argument('-d','--datadir')
-ap.add_argument('-l','--loglevel',choices=('debug','info','warn','error','fatal'),default='info')
-ap.add_argument('-p','--pagesize',choices=[s.lower() for s in dir(pagesizes) if re.match(r'[A-Z]',s)], default='a4')
+ap.add_argument('-d','--datadir',
+                help="Re-generate PDF from this existing directory rather than starting from scratch.")
+ap.add_argument('-l','--loglevel',choices=('debug','info','warn','error','fatal'),default='info',
+                help="Verbosity of output. Defaults to info.")
+ap.add_argument('-p','--pagesize',choices=[s.lower() for s in dir(pagesizes) if re.match(r'[A-Z]',s)], default='a4',
+                help="Paper size to output. Defaults to a4.")
+#ap.add_argument('-f','--frontonly',action='store_true',
+#                help="Create single-sided cards without backs in PDF (default is double-sided)")
 args = ap.parse_args()
     
 
@@ -511,13 +519,21 @@ prefront_style = styles.ParagraphStyle('prefront-style', fontName='Helvetica', f
 front_style = styles.ParagraphStyle('front-style', fontName='Helvetica', fontSize=DECK_TITLE_SIZE,
                                     alignment=styles.TA_CENTER, leading=DECK_TITLE_SIZE*CARD_LINE_SPACING)
 title_style = styles.ParagraphStyle('title-style', fontName='Helvetica', fontSize=CARD_TITLE_SIZE, 
-                                    alignment=styles.TA_CENTER, textColor=CARD_TEXT_COLOUR)
+                                    alignment=styles.TA_CENTER, textColor=colors.Color(*colors.hsl2rgb(*CARD_TEXT_HSL)))
 desc_style = styles.ParagraphStyle('desc-style', fontName='Helvetica', fontSize=CARD_TEXT_SIZE, 
-                                   leading=CARD_TEXT_SIZE*CARD_LINE_SPACING, textColor=CARD_TEXT_COLOUR)
+                                   leading=CARD_TEXT_SIZE*CARD_LINE_SPACING, 
+                                   textColor=colors.Color(*colors.hsl2rgb(*CARD_TEXT_HSL)))
+front_tbl_style = platypus.TableStyle([('ALIGN',(0,0),(-1,-1),'CENTER'),
+                                       ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+                                       ('ROWBACKGROUNDS',(0,0),(-1,-1),[colors.hsl2rgb(*CARD_BOX_HSL_1)]),
+                                       ('TOPPADDING',(0,0),(-1,-1),2*mm),
+                                       ('BOTTOMPADDING',(0,0),(-1,-1),2*mm),
+                                       ('LEFTPADDING',(0,0),(-1,-1),2*mm),
+                                       ('RIGHTPADDING',(0,0),(-1,-1),2*mm)])
 tbl_style = platypus.TableStyle([('ALIGN',(0,0),(0,1),'CENTER'),
                                  ('ALIGN',(0,3),(-1,-1),'CENTER'),
                                  ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
-                                 #('ROWBACKGROUNDS',(0,0),(-1,-1),[(0.9,0.9,0.9),(0.8,0.8,0.8)]),
+                                 ('ROWBACKGROUNDS',(0,0),(-1,-1),[colors.hsl2rgb(*CARD_BOX_HSL_1),None]),
                                  ('TOPPADDING',(0,0),(-1,-1),0),
                                  ('BOTTOMPADDING',(0,0),(-1,-1),0),
                                  ('LEFTPADDING',(0,0),(0,-2),3*mm),
@@ -528,7 +544,8 @@ stat_tbl_style = platypus.TableStyle([('ALIGN',(0,0),(0,-1),'LEFT'),
                                       ('ALIGN',(1,0),(1,-1),'RIGHT'),
                                       ('FONTNAME',(0,0),(-1,-1),'Helvetica'),
                                       ('FONTSIZE',(0,0),(-1,-1),CARD_TEXT_SIZE),
-                                      #('ROWBACKGROUNDS',(0,0),(-1,-1),[(1.0,1.0,1.0),(0.8,0.8,0.8)]),
+                                      ('ROWBACKGROUNDS',(0,0),(-1,-1),[colors.hsl2rgb(*CARD_BOX_HSL_1),
+                                                                       colors.hsl2rgb(*CARD_BOX_HSL_2)]),
                                       ('LEFTPADDING',(0,0),(-1,-1),2*mm),
                                       ('RIGHTPADDING',(0,0),(-1,-1),2*mm),
                                       ('TOPPADDING',(0,0),(-1,-1),0),
@@ -546,12 +563,13 @@ pretitle = platypus.Paragraph('<i>Trop tumps</i>', prefront_style)
 title = platypus.Paragraph(deck['name'], front_style)
 desc  = platypus.Paragraph(deck['description'], desc_style) if deck['description'] else None
 tbl = platypus.Table([[pretitle],[title],[desc]])
+tbl.setStyle(front_tbl_style)
 tblsize = tbl.wrap(*facesize)
 tbl.wrapOn(canv, *facesize)
 tbl.drawOn(canv, 0,-facesize[1]*(1-GOLDEN_RATIO)-tblsize[1]/2)
 
 # cards
-for card in deck['cards']:    
+for card_idx, card in enumerate(deck['cards']):
     next(canv_itr)
     title = platypus.Paragraph(card['name'], title_style)
     img = platypus.Image(os.path.join(output_dir, card['image']), facesize[0], 
@@ -569,5 +587,9 @@ for card in deck['cards']:
     tblsize = tbl.wrap(*facesize)
     tbl.wrapOn(canv, *facesize)
     tbl.drawOn(canv, 0, -tblsize[1])
+    
+    canv.setFillColorRGB(*colors.hsl2rgb(*CARD_TEXT_HSL))
+    canv.setFont('Helvetica', CARD_SMALLPRINT_SIZE)
+    canv.drawRightString(facesize[0], -facesize[1], "{0} / {1}".format(card_idx+1, len(deck['cards'])))
                         
 canv.save()
