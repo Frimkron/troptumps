@@ -4,12 +4,13 @@
 TODO: Properties that are basically the same with different names/prefixes
 TODO: Make pdf
     TODO: unicode font
+        TODO: mapping from unicode planes to fonts
+        TODO: swap to appropriate fonts for 'special' characters
     TODO: credits on title card
     TODO: card backs
-        TODO: how do printers handle double-sided?
+    TODO: configurable colours
 TODO: At least fix middle initials as end of sentences
 TODO: Can post instead of get to avoid max uri length? (it would appear not) 
-TODO: Don't abort on thumbnail 404 (test)
 """
 
 import os
@@ -24,6 +25,9 @@ import random
 import pprint
 import argparse
 import dateutil.parser
+import enum
+import colorsys
+from collections import namedtuple
 from reportlab.pdfgen import canvas
 from reportlab import platypus
 from reportlab.lib import pagesizes
@@ -66,8 +70,21 @@ FONT_NAMES = { 'family': 'Ubuntu',
                'italic': 'Ubuntu-RI',
                'bold': 'Ubuntu-B', 
                'bolditalic': 'Ubuntu-BI' }
+
+class BacksType(enum.Enum):
+    LONG_FLIP = enum.auto()
+    SHORT_FLIP = enum.auto()
+    NONE = enum.auto()
+               
 GOLDEN_RATIO = 0.617
-PAGE_MARGIN = 10*mm
+DEFAULT_PAGE_SIZE = 'a4'
+DEFAULT_LOG_LEVEL = 'info'
+DEFAULT_PAGE_MARGIN = 10*mm
+DEFAULT_BLEED_MARGIN = 3*mm
+DEFAULT_PRIMARY_S = 0.5
+DEFAULT_PRIMARY_L = 0.5
+DEFAULT_BACKS_TYPE = BacksType.LONG_FLIP.name.lower()
+
 CARD_SIZE = 63.5*mm, 88.9*mm
 CARD_TEXT_SIZE = 2.5*mm
 CARD_SMALLPRINT_SIZE = 2*mm
@@ -78,10 +95,18 @@ CARD_SECTION_PROPS = 0.75, 2, 1.75, 3.5
 DECK_TITLE_SIZE = 8*mm
 DECK_PRETITLE_SIZE = 6*mm
 CARD_STAT_SPACING = 1.3
-CARD_PRIMARY_HSL = 1/6.0, 0.8, 0.5
 CARD_BOX_HSL_1 = 0.0, 0.0, 0.9
 CARD_BOX_HSL_2 = 0.0, 0.0, 0.8
 CARD_TEXT_HSL = 0.0, 0.0, 0.1
+CARD_CORNER_RAD = 4*mm
+
+class PdfVars(enum.Enum):
+    BLEED_MARGIN = enum.auto()
+    PAGE_MARGIN = enum.auto()
+    PAGE_SIZE = enum.auto()
+    ROUND_CORNERS = enum.auto()
+    PRIMARY_HSL = enum.auto()
+    SECONDARY_HSL = enum.auto()
 
 
 def query(q):
@@ -222,44 +247,101 @@ def pluralise(name):
     return name+'s'
 
 
-def grid_size(pagesize):
-    return int((pagesize[0]-PAGE_MARGIN*2)/CARD_SIZE[0]), int((pagesize[1]-PAGE_MARGIN*2)/CARD_SIZE[1])
+def contrasting_h(hsl):
+    return (hsl[0]+0.5)%1.0, hsl[1], hsl[2]
     
     
-def card_canv_itr(c, pagesize):
-    gridsize = grid_size(pagesize)
-    olh,ols,oll = list(CARD_PRIMARY_HSL)
-    oll = (oll+0.5) % 1.0
-    outline_hsl = olh,ols,oll
+def contrasting_l(hsl):
+    return hsl[0], hsl[1], (hsl[2]+0.5)%1.0
+
+
+def grid_size(config):
+    avail_page_w = config[PdfVars.PAGE_SIZE][0]-config[PdfVars.PAGE_MARGIN]*2
+    avail_page_h = config[PdfVars.PAGE_SIZE][1]-config[PdfVars.PAGE_MARGIN]*2
+    total_card_w = CARD_SIZE[0] + config[PdfVars.BLEED_MARGIN]*2
+    total_card_h = CARD_SIZE[1] + config[PdfVars.BLEED_MARGIN]*2
+    return int(avail_page_w / total_card_w), int(avail_page_h / total_card_h)
+    
+    
+def card_canv_itr(c, config):
+    gridsize = grid_size(config)
+    pagesize = config[PdfVars.PAGE_SIZE]
+    pmargin = config[PdfVars.PAGE_MARGIN]
+    bleed = config[PdfVars.BLEED_MARGIN]
+    primary_hsl = config[PdfVars.PRIMARY_HSL]
+    outline_hsl = contrasting_l(primary_hsl)
+    rounded = config[PdfVars.ROUND_CORNERS]
+    card_space = CARD_SIZE[0]+bleed*2, CARD_SIZE[1]+bleed*2
     while True:
-        c.translate(PAGE_MARGIN, pagesize[1]-PAGE_MARGIN)
+        c.translate(pmargin, pagesize[1]-pmargin)
         c.saveState()
         for j in range(gridsize[1]):
             for i in range(gridsize[0]):
-                c.translate(CARD_SIZE[0]*i, -CARD_SIZE[1]*j)
+                # draw background colour over whole bleed area
+                c.translate(card_space[0]*i, -card_space[1]*j)
+                c.setFillColorRGB(*colors.hsl2rgb(*primary_hsl))
+                c.rect(0.0, 0.0, card_space[0], -card_space[1], stroke=0, fill=1)
+                # draw card outline
+                c.translate(bleed, -bleed)
                 c.setStrokeColorRGB(*colors.hsl2rgb(*outline_hsl))
-                c.setLineWidth(1*mm)
-                c.setFillColorRGB(*colors.hsl2rgb(*CARD_PRIMARY_HSL))
-                c.rect(0.0, 0.0, CARD_SIZE[0], -CARD_SIZE[1], stroke=1, fill=1)
+                c.setLineWidth(0.5*mm)
+                if rounded:
+                    c.roundRect(0.0, -CARD_SIZE[1], CARD_SIZE[0], CARD_SIZE[1], CARD_CORNER_RAD, stroke=1, fill=0)
+                else:
+                    c.rect(0.0, 0.0, CARD_SIZE[0], -CARD_SIZE[1], stroke=1, fill=0)
+                # move to card design area
                 c.translate(CARD_MARGIN, -CARD_MARGIN)
                 yield
                 c.restoreState()
                 c.saveState()
         c.showPage()
-            
+
+
+def colour_string(string):
+    m = re.match(r'^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$', string, re.IGNORECASE)    
+    if m:
+        r,g,b = [int(m.group(c+1),16)/255.0 for c in range(3)]
+        h,l,s = colorsys.rgb_to_hls(r,g,b)
+        return h,s,l
+
+    m = re.match(r'^#([0-9a-f])([0-9a-f])([0-9a-f])$', string, re.IGNORECASE)
+    if m:
+        r,g,b = [int(m.group(c+1),16)/15.0 for c in range(3)]
+        h,l,s = colorsys.rgb_to_hls(r,g,b)
+        return h,s,l
+        
+    named_colours = { n: getattr(colors,n) for n in dir(colors) 
+                      if isinstance(getattr(colors,n),colors.Color) and re.match(r'^[a-z]+$',n) }
+    name = string.replace(' ','').lower()
+    if name in named_colours:
+        r,g,b = named_colours[name].rgb()
+        h,l,s = colorsys.rgb_to_hls(r,g,b)
+        return h,s,l
+        
+    raise ValueError()
+    
     
 ap = argparse.ArgumentParser()
 ap.add_argument('-d','--datadir',
                 help="Re-generate PDF from this existing directory rather than starting from scratch.")
-ap.add_argument('-l','--loglevel',choices=('debug','info','warn','error','fatal'),default='info',
-                help="Verbosity of output. Defaults to info.")
-ap.add_argument('-p','--pagesize',choices=[s.lower() for s in dir(pagesizes) if re.match(r'[A-Z]',s)], default='a4',
-                help="Paper size to output. Defaults to a4.")
-#ap.add_argument('-f','--frontonly',action='store_true',
-#                help="Create single-sided cards without backs in PDF (default is double-sided)")
+ap.add_argument('-l','--loglevel',choices=('debug','info','warn','error','fatal'),default=DEFAULT_LOG_LEVEL,
+                help="Verbosity of output. Defaults to {}.".format(DEFAULT_LOG_LEVEL))
+ap.add_argument('-p','--pagesize',choices=[s.lower() for s in dir(pagesizes) if re.match(r'[A-Z]',s)], 
+                default=DEFAULT_PAGE_SIZE,
+                help="Paper size to output. Defaults to {}.".format(DEFAULT_PAGE_SIZE))
+ap.add_argument('-m','--pagemargin',type=float,default=DEFAULT_PAGE_MARGIN,
+                help="Page margin in mm. Defaults to {}.".format(DEFAULT_PAGE_MARGIN))
+ap.add_argument('-b','--bleedmargin',type=float,default=DEFAULT_BLEED_MARGIN,
+                help="Bleed area to leave around cards, in mm. Defaults to {}.".format(DEFAULT_BLEED_MARGIN))
+#ap.add_argument('-b','--backs', choices=([b.name.lower() for b in BacksType]), default=DEFAULT_BACKS_TYPE,
+#                help="Method to orient odd pages for card backs. Defaults to {}".format(DEFAULT_BACKS_TYPE))
+ap.add_argument('-c','--color',type=colour_string,default=None,
+                help="Force primary color. Takes an HTML color name or hex code.")
+ap.add_argument('-q','--sqcorners',action='store_true',
+                help="Print square card corners instead of round.")
+                
 args = ap.parse_args()
     
-
 logging.basicConfig(level=getattr(logging,args.loglevel.upper()))
 input_dir = args.datadir
 prefix_lookup = dict(IMPLICIT_PREFIXES)
@@ -495,14 +577,26 @@ logging.info("Generating PDF")
 output_dir = input_dir
 output_name = input_name
 
+pdf_config = {
+    PdfVars.PAGE_SIZE: getattr(pagesizes, args.pagesize.upper()),
+    PdfVars.PAGE_MARGIN: args.pagemargin,
+    PdfVars.BLEED_MARGIN: args.bleedmargin,
+    PdfVars.ROUND_CORNERS: not args.sqcorners,
+    PdfVars.PRIMARY_HSL: args.color if args.color is not None \
+                            else (random.random(),DEFAULT_PRIMARY_S,DEFAULT_PRIMARY_L),
+}
+
 # establish if portrait or landscape better
-pagesize = getattr(pagesizes, args.pagesize.upper())
-pt_gridsize = grid_size(pagesizes.portrait(pagesize))
-ls_gridsize = grid_size(pagesizes.landscape(pagesize))
+pdf_config[PdfVars.PAGE_SIZE] = pagesizes.portrait(pdf_config[PdfVars.PAGE_SIZE])
+pt_gridsize = grid_size(pdf_config)
+
+pdf_config[PdfVars.PAGE_SIZE] = pagesizes.landscape(pdf_config[PdfVars.PAGE_SIZE])
+ls_gridsize = grid_size(pdf_config)
+
 if pt_gridsize[0]*pt_gridsize[1] > ls_gridsize[0]*ls_gridsize[1]:
-    pagesize = pagesizes.portrait(pagesize)
+    pdf_config[PdfVars.PAGE_SIZE] = pagesizes.portrait(pdf_config[PdfVars.PAGE_SIZE])
 else:
-    pagesize = pagesizes.landscape(pagesize)
+    pdf_config[PdfVars.PAGE_SIZE] = pagesizes.landscape(pdf_config[PdfVars.PAGE_SIZE])
 
 # load font
 #ffam = FONT_NAMES['family']
@@ -553,13 +647,14 @@ stat_tbl_style = platypus.TableStyle([('ALIGN',(0,0),(0,-1),'LEFT'),
                                       ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
                                       ('LEADING',(0,0),(-1,-1),CARD_TEXT_SIZE)])
     
-canv = canvas.Canvas(os.path.join(output_dir, '{}.pdf'.format(output_name)), pagesize=pagesize)
-canv_itr = card_canv_itr(canv, pagesize)
+canv = canvas.Canvas(os.path.join(output_dir, '{}.pdf'.format(output_name)), pagesize=pdf_config[PdfVars.PAGE_SIZE])
+canv.setTitle('Trop Tumps '+deck['name'])
+canv_itr = card_canv_itr(canv, pdf_config)
 facesize = CARD_SIZE[0]-CARD_MARGIN*2, CARD_SIZE[1]-CARD_MARGIN*2
 
 # title card
 next(canv_itr)
-pretitle = platypus.Paragraph('<i>Trop tumps</i>', prefront_style)
+pretitle = platypus.Paragraph('<i>Trop Tumps</i>', prefront_style)
 title = platypus.Paragraph(deck['name'], front_style)
 desc  = platypus.Paragraph(deck['description'], desc_style) if deck['description'] else None
 tbl = platypus.Table([[pretitle],[title],[desc]])
@@ -588,7 +683,7 @@ for card_idx, card in enumerate(deck['cards']):
     tbl.wrapOn(canv, *facesize)
     tbl.drawOn(canv, 0, -tblsize[1])
     
-    canv.setFillColorRGB(*colors.hsl2rgb(*CARD_TEXT_HSL))
+    canv.setFillColorRGB(*colors.hsl2rgb(*contrasting_l(pdf_config[PdfVars.PRIMARY_HSL])))
     canv.setFont('Helvetica', CARD_SMALLPRINT_SIZE)
     canv.drawRightString(facesize[0], -facesize[1], "{0} / {1}".format(card_idx+1, len(deck['cards'])))
                         
