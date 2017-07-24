@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 """ 
+TODO: Fix misaligned backs on last page
 TODO: Properties that are basically the same with different names/prefixes
 TODO: Make pdf
     TODO: unicode font
@@ -9,6 +10,7 @@ TODO: Make pdf
     TODO: credits on title card
     TODO: card backs
     TODO: configurable colours
+        TODO: secondary colour
 TODO: At least fix middle initials as end of sentences
 TODO: Can post instead of get to avoid max uri length? (it would appear not) 
 """
@@ -79,7 +81,7 @@ class BacksType(enum.Enum):
 GOLDEN_RATIO = 0.617
 DEFAULT_PAGE_SIZE = 'a4'
 DEFAULT_LOG_LEVEL = 'info'
-DEFAULT_PAGE_MARGIN = 10*mm
+DEFAULT_PAGE_MARGIN = 7*mm #10*mm
 DEFAULT_BLEED_MARGIN = 3*mm
 DEFAULT_PRIMARY_S = 0.5
 DEFAULT_PRIMARY_L = 0.5
@@ -107,6 +109,7 @@ class PdfVars(enum.Enum):
     ROUND_CORNERS = enum.auto()
     PRIMARY_HSL = enum.auto()
     SECONDARY_HSL = enum.auto()
+    BACKS_TYPE = enum.auto()
 
 
 def query(q):
@@ -264,6 +267,43 @@ def grid_size(config):
     
     
 def card_canv_itr(c, config):
+    backstype = config[PdfVars.BACKS_TYPE]
+    text_hsl = contrasting_l(config[PdfVars.PRIMARY_HSL])
+    facesize = CARD_SIZE[0]-CARD_MARGIN*2, CARD_SIZE[1]-CARD_MARGIN*2
+    endnow = False
+    while True:
+        # fronts        
+        cardcount = 0
+        fronts_itr = card_canv_itr_page(c, config, False, False)
+        for i in fronts_itr:
+            cardcount += 1
+            endnow = yield
+            if endnow:
+                halt_card_itr(fronts_itr)
+        # backs
+        if backstype != BacksType.NONE:
+            """ 
+               < L >        < S >
+              +--+--+    +----+----+
+            ^ |^ | ^|  ^ |^   |   ^|
+            S +--+--+  L +----+----+
+            v |v |     v |v   |
+              +--+ Po    +----+   La
+            """
+            pagesize = config[PdfVars.PAGE_SIZE]
+            upsidedown = (pagesize[1] > pagesize[0]) == (backstype == BacksType.SHORT_FLIP)
+            backs_itr = card_canv_itr_page(c,config, True, upsidedown) 
+            for i in range(cardcount):
+                next(backs_itr)
+                c.setFillColorRGB(*colors.hsl2rgb(*text_hsl))
+                c.setFont("Helvetica", DECK_TITLE_SIZE)
+                c.drawCentredString(facesize[0]/2, -facesize[1]*(1-GOLDEN_RATIO), "Trop Tumps")
+            halt_card_itr(backs_itr)
+        if endnow:
+            break
+
+
+def card_canv_itr_page(c, config, ralign, upsidedown):
     gridsize = grid_size(config)
     pagesize = config[PdfVars.PAGE_SIZE]
     pmargin = config[PdfVars.PAGE_MARGIN]
@@ -272,29 +312,43 @@ def card_canv_itr(c, config):
     outline_hsl = contrasting_l(primary_hsl)
     rounded = config[PdfVars.ROUND_CORNERS]
     card_space = CARD_SIZE[0]+bleed*2, CARD_SIZE[1]+bleed*2
-    while True:
-        c.translate(pmargin, pagesize[1]-pmargin)
-        c.saveState()
-        for j in range(gridsize[1]):
-            for i in range(gridsize[0]):
-                # draw background colour over whole bleed area
-                c.translate(card_space[0]*i, -card_space[1]*j)
-                c.setFillColorRGB(*colors.hsl2rgb(*primary_hsl))
-                c.rect(0.0, 0.0, card_space[0], -card_space[1], stroke=0, fill=1)
-                # draw card outline
-                c.translate(bleed, -bleed)
-                c.setStrokeColorRGB(*colors.hsl2rgb(*outline_hsl))
-                c.setLineWidth(0.5*mm)
-                if rounded:
-                    c.roundRect(0.0, -CARD_SIZE[1], CARD_SIZE[0], CARD_SIZE[1], CARD_CORNER_RAD, stroke=1, fill=0)
-                else:
-                    c.rect(0.0, 0.0, CARD_SIZE[0], -CARD_SIZE[1], stroke=1, fill=0)
-                # move to card design area
-                c.translate(CARD_MARGIN, -CARD_MARGIN)
-                yield
-                c.restoreState()
-                c.saveState()
-        c.showPage()
+    xstart = (pagesize[0]-pmargin*2-card_space[0]*gridsize[0]) if ralign else 0
+
+    c.translate(pagesize[0]/2, pagesize[1]/2)
+    c.rotate(180 if upsidedown else 0)   
+    c.translate(-pagesize[0]/2 + pmargin + xstart, pagesize[1]/2 - pmargin)
+    endnow = False
+    for j in range(gridsize[1]):
+        for i in range(gridsize[0]):
+            c.saveState()
+            # draw background colour over whole bleed area
+            c.translate(card_space[0]*i, -card_space[1]*j)
+            c.setFillColorRGB(*colors.hsl2rgb(*primary_hsl))
+            c.rect(0.0, 0.0, card_space[0], -card_space[1], stroke=0, fill=1)
+            # draw card outline
+            c.translate(bleed, -bleed)
+            c.setStrokeColorRGB(*colors.hsl2rgb(*outline_hsl))
+            c.setLineWidth(0.5*mm)
+            if rounded:
+                c.roundRect(0.0, -CARD_SIZE[1], CARD_SIZE[0], CARD_SIZE[1], CARD_CORNER_RAD, stroke=1, fill=0)
+            else:
+                c.rect(0.0, 0.0, CARD_SIZE[0], -CARD_SIZE[1], stroke=1, fill=0)
+            # move to card design area
+            c.translate(CARD_MARGIN, -CARD_MARGIN)
+            endnow = yield
+            c.restoreState()
+            if endnow: 
+                break
+        if endnow: 
+            break            
+    c.showPage()
+
+
+def halt_card_itr(itr):
+    try:
+        itr.send(True)
+    except StopIteration:
+        pass
 
 
 def colour_string(string):
@@ -333,8 +387,8 @@ ap.add_argument('-m','--pagemargin',type=float,default=DEFAULT_PAGE_MARGIN,
                 help="Page margin in mm. Defaults to {}.".format(DEFAULT_PAGE_MARGIN))
 ap.add_argument('-b','--bleedmargin',type=float,default=DEFAULT_BLEED_MARGIN,
                 help="Bleed area to leave around cards, in mm. Defaults to {}.".format(DEFAULT_BLEED_MARGIN))
-#ap.add_argument('-b','--backs', choices=([b.name.lower() for b in BacksType]), default=DEFAULT_BACKS_TYPE,
-#                help="Method to orient odd pages for card backs. Defaults to {}".format(DEFAULT_BACKS_TYPE))
+ap.add_argument('-k','--backs', choices=([b.name.lower() for b in BacksType]), default=DEFAULT_BACKS_TYPE,
+                help="Method to orient odd pages for card backs. Defaults to {}".format(DEFAULT_BACKS_TYPE))
 ap.add_argument('-c','--color',type=colour_string,default=None,
                 help="Force primary color. Takes an HTML color name or hex code.")
 ap.add_argument('-q','--sqcorners',action='store_true',
@@ -584,6 +638,7 @@ pdf_config = {
     PdfVars.ROUND_CORNERS: not args.sqcorners,
     PdfVars.PRIMARY_HSL: args.color if args.color is not None \
                             else (random.random(),DEFAULT_PRIMARY_S,DEFAULT_PRIMARY_L),
+    PdfVars.BACKS_TYPE: getattr(BacksType, args.backs.upper()),
 }
 
 # establish if portrait or landscape better
@@ -686,5 +741,6 @@ for card_idx, card in enumerate(deck['cards']):
     canv.setFillColorRGB(*colors.hsl2rgb(*contrasting_l(pdf_config[PdfVars.PRIMARY_HSL])))
     canv.setFont('Helvetica', CARD_SMALLPRINT_SIZE)
     canv.drawRightString(facesize[0], -facesize[1], "{0} / {1}".format(card_idx+1, len(deck['cards'])))
+halt_card_itr(canv_itr)
                         
 canv.save()
