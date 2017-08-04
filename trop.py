@@ -6,7 +6,7 @@ TODO: Make pdf
     TODO: unicode font
         TODO: mapping from unicode planes to fonts
         TODO: swap to appropriate fonts for 'special' characters
-TODO: At least fix middle initials as end of sentences
+TODO: At least fix middle initials as end of sentences (test)
 TODO: Can post instead of get to avoid max uri length? (it would appear not) 
 """
 
@@ -228,7 +228,25 @@ def prefix_declarations(lookup):
     
     
 def first_sentence(para):
-    return ''.join(re.split(r"(?<=\w)([.!?]) +(?=\w)", para, 1)[:2])
+    return re.match(r""" 
+        # content
+        (
+            [^("\[]   # any non-bracket
+            | ".*?"   # quote-delimited
+            | \(.*?\) # round-delimited
+            | \[.*?\] # square-delimited
+        )+?
+        # ending
+        (
+            # end symbols
+            (
+                (?<! (\b[A-Z] | \.) ) \. # period, not prefixed with another period or single capital
+                | [!?]+                  # or one or more question/exclamation marks
+            ) (?=(\s|$))   # suffixed by whitespace or EOI
+            # alternatively just EOI
+            | $ 
+        )
+        """, para, re.VERBOSE).group(0)
     
 
 def pluralise(name):
