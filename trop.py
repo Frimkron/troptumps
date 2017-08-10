@@ -2,10 +2,6 @@
 
 """ 
 TODO: Properties that are basically the same with different names/prefixes
-TODO: Make pdf
-    TODO: unicode font
-        TODO: mapping from unicode planes to fonts
-        TODO: swap to appropriate fonts for 'special' characters
 TODO: At least fix middle initials as end of sentences (test)
 TODO: Can post instead of get to avoid max uri length? (it would appear not) 
 """
@@ -62,11 +58,12 @@ IMPLICIT_PREFIXES = {
     'http://dbpedia.org/property/': 'dbp',
     'http://dbpedia.org/resource/': 'dbr',
 }
-FONT_NAMES = { 'family': 'Ubuntu',
-               'regular': 'Ubuntu-R', 
-               'italic': 'Ubuntu-RI',
-               'bold': 'Ubuntu-B', 
-               'bolditalic': 'Ubuntu-BI' }
+DEFAULT_FONT = 'DejaVuSans'
+FONT_FALLBACK_REGEX = r'[^\u0000-\u01ff]+'
+FONT_FALLBACK_ORDER = ['DejaVuSans', 'Cyberbit']
+FONT_B_SUFFIX = '-Bold'
+FONT_I_SUFFIX = '-Oblique'
+FONT_BI_SUFFIX = '-BoldOblique'
 
 class BacksType(enum.Enum):
     LONG_FLIP = enum.auto()
@@ -84,10 +81,12 @@ DEFAULT_BACKS_TYPE = BacksType.LONG_FLIP.name.lower()
 SECONDARY_HUE_ADJACENCY = 0.15
 SECONDARY_LUM_CONTRAST = 0.35
 SECONDARY_DESATURATION = 0.3
+SECONDARY_ROW_LUM_VAR = 0.1
 TEXT_LUM_CONTRAST = 0.7
 
 CARD_SIZE = 63.5*mm, 88.9*mm
-CARD_TEXT_SIZE = 2.5*mm
+CARD_TEXT_SIZE = 2.25*mm
+CARD_STAT_SIZE = 2.15*mm
 CARD_SMALLPRINT_SIZE = 2*mm
 CARD_TITLE_SIZE = 3.5*mm
 CARD_MARGIN = 3*mm
@@ -246,7 +245,8 @@ def first_sentence(para):
             # alternatively just EOI
             | $ 
         )
-        """, para, re.VERBOSE).group(0)
+        """
+        , para, re.VERBOSE).group(0)
     
 
 def pluralise(name):
@@ -278,6 +278,10 @@ def contrasting_l(hsl, amount):
 
 def desaturated(hsl, amount):
     return hsl[0], max(min(hsl[1]-amount,1.0),0.0), hsl[2]
+
+
+def lightened(hsl, amount):
+    return hsl[0], hsl[1], max(min(hsl[2]+amount,1.0),0.0)
 
 
 def grid_size(config):
@@ -318,7 +322,7 @@ def card_canv_itr(c, config):
             for i in range(cardcount):
                 next(backs_itr)
                 c.setFillColorRGB(*colors.hsl2rgb(*text_hsl))
-                c.setFont("Helvetica", DECK_TITLE_SIZE)
+                c.setFont(DEFAULT_FONT+FONT_I_SUFFIX, DECK_TITLE_SIZE)
                 c.drawCentredString(facesize[0]/2, -facesize[1]*(1-GOLDEN_RATIO), "Trop Tumps")
             halt_card_itr(backs_itr)
         if endnow:
@@ -396,6 +400,34 @@ def colour_string(string):
         return h,s,l
         
     raise ValueError()
+
+
+def tag_font_fallbacks(text):
+    def repl(match):
+        out = ""
+        prev = None
+        fnum = 0
+        for c in match.group(0):
+            while fnum < len(FONT_FALLBACK_ORDER):
+                if ord(c) in pdfmetrics.getFont(FONT_FALLBACK_ORDER[fnum]).face.charWidths:
+                    if fnum != prev:
+                        if prev is not None:
+                            out += '</font>'
+                        out += '<font face="{}">'.format(FONT_FALLBACK_ORDER[fnum])
+                        prev = fnum
+                    out += c
+                    break
+                fnum += 1
+            else:
+                logging.warn('No font for character {}'.format(hex(ord(c))))
+                out += c
+                fnum = 0
+        if prev is not None:
+            out += '</font>'
+        logging.debug('Fallback replacement: "{}" -> "{}"'.format(match.group(0), out))
+        return out
+                
+    return re.sub(FONT_FALLBACK_REGEX, repl, text)
     
     
 ap = argparse.ArgumentParser()
@@ -692,33 +724,44 @@ if pt_gridsize[0]*pt_gridsize[1] > ls_gridsize[0]*ls_gridsize[1]:
 else:
     pdf_config[PdfVars.PAGE_SIZE] = pagesizes.landscape(pdf_config[PdfVars.PAGE_SIZE])
 
-# load font
-#ffam = FONT_NAMES['family']
-#freg = FONT_NAMES.get('regular',ffam)
-#fbld = FONT_NAMES.get('bold',freg)
-#fitl = FONT_NAMES.get('italic',freg)
-#fbitl = FONT_NAMES.get('bolditalic',fbld)
-#for fname in set([freg, fbld, fitl, fbitl]):
-#    pdfmetrics.registerFont(ttfonts.TTFont(fname, fname+'.ttf'))
-#pdfmetrics.registerFontFamily(freg, normal=freg, bold=fbld, italic=fitl, boldItalic=fbitl)
+# load fonts
+for fontfam in FONT_FALLBACK_ORDER:
+    for fontext in ('.ttf', '.otf'):
+        fargs = {}
+        for fsuff,arg in [('','normal'), (FONT_B_SUFFIX,'bold'), (FONT_I_SUFFIX,'italic'), 
+                          (FONT_BI_SUFFIX,'boldItalic')]:
+            fname = fontfam + fsuff
+            ffile = fname + fontext
+            if not os.path.exists(ffile):
+                continue
+            pdfmetrics.registerFont(ttfonts.TTFont(fname, ffile))
+            fargs[arg] = fname
 
-prefront_style = styles.ParagraphStyle('prefront-style', fontName='Helvetica', fontSize=DECK_PRETITLE_SIZE,
+        if len(fargs) > 0:
+            pdfmetrics.registerFontFamily(fontfam, **fargs)
+            break
+
+prefront_style = styles.ParagraphStyle('prefront-style', fontName=DEFAULT_FONT, fontSize=DECK_PRETITLE_SIZE,
                                         alignment=styles.TA_CENTER, textColor=colors.Color(
                                             *colors.hsl2rgb(*pdf_config[PdfVars.TEXT_HSL])))
-front_style = styles.ParagraphStyle('front-style', fontName='Helvetica', fontSize=DECK_TITLE_SIZE,
+front_style = styles.ParagraphStyle('front-style', fontName=DEFAULT_FONT, fontSize=DECK_TITLE_SIZE,
                                     alignment=styles.TA_CENTER, leading=DECK_TITLE_SIZE*CARD_LINE_SPACING,
                                     textColor=colors.Color(*colors.hsl2rgb(*pdf_config[PdfVars.TEXT_HSL])))
-title_style = styles.ParagraphStyle('title-style', fontName='Helvetica', fontSize=CARD_TITLE_SIZE, 
+title_style = styles.ParagraphStyle('title-style', fontName=DEFAULT_FONT, fontSize=CARD_TITLE_SIZE, 
                                     alignment=styles.TA_CENTER, textColor=colors.Color(
                                         *colors.hsl2rgb(*pdf_config[PdfVars.TEXT_HSL])))
-desc_style = styles.ParagraphStyle('desc-style', fontName='Helvetica', fontSize=CARD_TEXT_SIZE, 
+desc_style = styles.ParagraphStyle('desc-style', fontName=DEFAULT_FONT, fontSize=CARD_TEXT_SIZE, 
                                    leading=CARD_TEXT_SIZE*CARD_LINE_SPACING, 
                                    textColor=colors.Color(*colors.hsl2rgb(*pdf_config[PdfVars.TEXT_HSL])))
-creds_style = styles.ParagraphStyle('creds-style', fontName='Helvetica', fontSize=CARD_TEXT_SIZE,
+creds_style = styles.ParagraphStyle('creds-style', fontName=DEFAULT_FONT, fontSize=CARD_TEXT_SIZE,
                                    leading=CARD_TEXT_SIZE*CARD_LINE_SPACING, alignment=styles.TA_CENTER,
                                    textColor=colors.Color(
                                         *colors.hsl2rgb(*contrasting_l(pdf_config[PdfVars.PRIMARY_HSL], 
                                                                        TEXT_LUM_CONTRAST))))
+stat_style = styles.ParagraphStyle('stat-style', fontName=DEFAULT_FONT, fontSize=CARD_STAT_SIZE, 
+                                   leading=CARD_STAT_SIZE, 
+                                   textColor=colors.Color(*colors.hsl2rgb(*pdf_config[PdfVars.TEXT_HSL])))
+                                   
 front_tbl_style = platypus.TableStyle([('ALIGN',(0,0),(-1,-1),'CENTER'),
                                        ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
                                        ('ROWBACKGROUNDS',(0,0),(-1,2),
@@ -740,18 +783,20 @@ tbl_style = platypus.TableStyle([('ALIGN',(0,0),(0,1),'CENTER'),
                                  ('RIGHTPADDING',(0,-1),(0,-1),0)])
 stat_tbl_style = platypus.TableStyle([('ALIGN',(0,0),(0,-1),'LEFT'),
                                       ('ALIGN',(1,0),(1,-1),'RIGHT'),
-                                      ('FONTNAME',(0,0),(-1,-1),'Helvetica'),
-                                      ('FONTSIZE',(0,0),(-1,-1),CARD_TEXT_SIZE),
+                                      ('FONTNAME',(0,0),(-1,-1),DEFAULT_FONT),
+                                      ('FONTSIZE',(0,0),(-1,-1),CARD_STAT_SIZE),
                                       ('ROWBACKGROUNDS',(0,0),(-1,-1),
-                                            [colors.hsl2rgb(*pdf_config[PdfVars.SECONDARY_HSL]),
-                                             colors.hsl2rgb(*pdf_config[PdfVars.SECONDARY_HSL]) ]),
+                                            [colors.hsl2rgb(*lightened(pdf_config[PdfVars.SECONDARY_HSL],
+                                                                       SECONDARY_ROW_LUM_VAR/2)),
+                                             colors.hsl2rgb(*lightened(pdf_config[PdfVars.SECONDARY_HSL],
+                                                                       -SECONDARY_ROW_LUM_VAR/2)) ]),
                                       ('TEXTCOLOR',(0,0),(-1,-1),colors.hsl2rgb(*pdf_config[PdfVars.TEXT_HSL])),
                                       ('LEFTPADDING',(0,0),(-1,-1),2*mm),
                                       ('RIGHTPADDING',(0,0),(-1,-1),2*mm),
                                       ('TOPPADDING',(0,0),(-1,-1),0),
                                       ('BOTTOMPADDING',(0,0),(-1,-1),0),
                                       ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
-                                      ('LEADING',(0,0),(-1,-1),CARD_TEXT_SIZE)])
+                                      ('LEADING',(0,0),(-1,-1),CARD_STAT_SIZE)])
     
 canv = canvas.Canvas(os.path.join(output_dir, '{}.pdf'.format(output_name)), pagesize=pdf_config[PdfVars.PAGE_SIZE])
 canv.setTitle('Trop Tumps '+deck['name'])
@@ -761,8 +806,8 @@ facesize = CARD_SIZE[0]-CARD_MARGIN*2, CARD_SIZE[1]-CARD_MARGIN*2
 # title card
 next(canv_itr)
 pretitle = platypus.Paragraph('<i>Trop Tumps</i>', prefront_style)
-title = platypus.Paragraph(deck['name'], front_style)
-desc  = platypus.Paragraph(deck['description'], desc_style) if deck['description'] else None
+title = platypus.Paragraph(tag_font_fallbacks(deck['name']), front_style)
+desc  = platypus.Paragraph(tag_font_fallbacks(deck['description']), desc_style) if deck['description'] else None
 creds = platypus.Paragraph(DECK_CREDITS, creds_style)
 tbl = platypus.Table([[pretitle],[title],[desc],[creds]])
 tbl.setStyle(front_tbl_style)
@@ -773,13 +818,14 @@ tbl.drawOn(canv, 0,-facesize[1]*(1-GOLDEN_RATIO)-tblsize[1]/2)
 # cards
 for card_idx, card in enumerate(deck['cards']):
     next(canv_itr)
-    title = platypus.Paragraph(card['name'], title_style)
+    title = platypus.Paragraph(tag_font_fallbacks(card['name']), title_style)
     img = platypus.Image(os.path.join(output_dir, card['image']), facesize[0], 
                          facesize[1]*(CARD_SECTION_PROPS[1]/sum(CARD_SECTION_PROPS)), 
                          kind='proportional') if card['image'] else None
-    desc = platypus.Paragraph(card['description'], desc_style) if card['description'] else None
-    stattbl = platypus.Table([ [deck['stats'][i], card['stats'][i]]
-                              for i in range(len(deck['stats'])) ], 
+    desc = platypus.Paragraph(tag_font_fallbacks(card['description']), desc_style) if card['description'] else None
+    stattbl = platypus.Table([ [platypus.Paragraph(tag_font_fallbacks(deck['stats'][i]), stat_style), 
+                                platypus.Paragraph(tag_font_fallbacks(card['stats'][i]), stat_style)]
+                               for i in range(len(deck['stats'])) ], 
                              rowHeights=CARD_TEXT_SIZE*CARD_STAT_SPACING, colWidths=(None, facesize[0]/3.0),
                              spaceBefore=0, spaceAfter=0)
     stattbl.setStyle(stat_tbl_style)
@@ -791,7 +837,7 @@ for card_idx, card in enumerate(deck['cards']):
     tbl.drawOn(canv, 0, -tblsize[1])
     
     canv.setFillColorRGB(*colors.hsl2rgb(*contrasting_l(pdf_config[PdfVars.PRIMARY_HSL], TEXT_LUM_CONTRAST)))
-    canv.setFont('Helvetica', CARD_SMALLPRINT_SIZE)
+    canv.setFont(DEFAULT_FONT, CARD_SMALLPRINT_SIZE)
     canv.drawRightString(facesize[0], -facesize[1], "{0} / {1}".format(card_idx+1, len(deck['cards'])))
 halt_card_itr(canv_itr)
                         
