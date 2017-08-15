@@ -2,8 +2,7 @@
 
 """ 
 TODO: Properties that are basically the same with different names/prefixes
-TODO: At least fix middle initials as end of sentences (test)
-TODO: Can post instead of get to avoid max uri length? (it would appear not) 
+    TODO: Removing duplicate properties from initial property query would help
 """
 
 import os
@@ -60,7 +59,7 @@ IMPLICIT_PREFIXES = {
 }
 DEFAULT_FONT = 'DejaVuSans'
 FONT_FALLBACK_REGEX = r'[^\u0000-\u01ff]+'
-FONT_FALLBACK_ORDER = ['DejaVuSans', 'Cyberbit']
+FONT_FALLBACK_ORDER = ['DejaVuSans', 'FreeSerif', 'KaiGenGothicCN']
 FONT_B_SUFFIX = '-Bold'
 FONT_I_SUFFIX = '-Oblique'
 FONT_BI_SUFFIX = '-BoldOblique'
@@ -112,14 +111,19 @@ class PdfVars(enum.Enum):
 
 def query(q):
     q = re.sub(r'\n\s+', '\n', q)
-    url = '{}?{}'.format(SPARQL_ENDPOINT, urlencode({
-            'timeout': '30000',
-            'default-graph-uri': DEFAULT_DATASET,
-            'query': q,
-            'format': 'json',    
-        }))
-    logging.debug('Requesting {}'.format(url))
-    data = json.load(codecs.getreader('utf-8')(urlopen(Request(url))))
+    url = SPARQL_ENDPOINT
+    postdata = urlencode({
+        'timeout': '30000',
+        'default-graph-uri': DEFAULT_DATASET,
+        'query': q,
+        'format': 'json',    
+    }).encode('utf-8')
+    headers = { 
+        'Content-Type': 'application/x-www-form-urlencoded', 
+        'Accept': 'application/json, text/json, */*', 
+    }
+    logging.debug('Requesting {}, [{}]'.format(url, postdata))
+    data = json.load(codecs.getreader('utf-8')(urlopen(Request(url, postdata, headers))))
     results = []
     for binding in data['results']['bindings']:
         results.append({})
@@ -234,7 +238,7 @@ def first_sentence(para):
             | ".*?"   # quote-delimited
             | \(.*?\) # round-delimited
             | \[.*?\] # square-delimited
-        )+?
+        )*?
         # ending
         (
             # end symbols
