@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 
 """ 
-TODO: Properties that are basically the same with different names/prefixes
-    TODO: Removing duplicate properties from initial property query would help
+TODO: Fix first sentence for "v.", "Co.", "Corp."
 """
 
 import os
@@ -255,14 +254,14 @@ def first_sentence(para):
 
 def pluralise(name):
     rules = [
-        (('ium','tum','lum','ion'), 2, 'a'),
+        (('ium','tum','lum','ion'), -2, 'a'),
         (('ula','mna','nna','rva','tia'), None, 'e'),
         (('ay','ey','iy','oy','uy'), None, 's'),
-        ('is', 2, 'es'),
-        (('us','um'), 2, 'i'),
-        (('ex','ix'), 2, 'ices'),
+        ('is', -2, 'es'),
+        (('us','um'), -2, 'i'),
+        (('ex','ix'), -2, 'ices'),
         ('ni', None, ''),
-        ('y', 1, 'ies'),
+        ('y', -1, 'ies'),
         (('s','x','ch','sh'), None, 'es'),
     ]
     for suff,back,repl in rules:
@@ -495,19 +494,25 @@ while not input_dir:
                            LIMIT %(max-num-stats)d""" % {
                                 'prefixes': prefix_declarations(prefix_lookup),
                                 'category': shorten_uri(prefix_lookup, category['name']), 
-                                'max-num-stats': MAX_NUM_STATS,
+                                'max-num-stats': MAX_NUM_STATS+3, # leeway for when we de-dup
                                 'numeric-clause': NUMERIC_VAL_CLAUSE.format('?v') })
         
         statistics = []
+        unqual_seen = set()
         for result in results:
             types = set(result['t'].split('|')) - {''}
             if len(types) == 0:
                 continue
+            unqual = result['p'].split('/')[-1]
+            if unqual in unqual_seen:
+                continue
+            unqual_seen.add(unqual)
             statistics.append({
                 'name': result['p'], 
                 'type': next(iter(types)),
                 'friendly': None,
             })
+        statistics = statistics[:MAX_NUM_STATS]
             
         logging.info('{} stats'.format(len(statistics)))
         for s in statistics:
@@ -659,6 +664,7 @@ while not input_dir:
                 res = urlopen(uri_to_ascii(card['image']))
             except HTTPError as e:
                 if e.getcode() == 404:
+                    card['image'] = None
                     continue
                 raise
             imagetype = IMAGE_TYPES[res.headers['Content-Type']]
@@ -823,7 +829,7 @@ tbl.drawOn(canv, 0,-facesize[1]*(1-GOLDEN_RATIO)-tblsize[1]/2)
 for card_idx, card in enumerate(deck['cards']):
     next(canv_itr)
     title = platypus.Paragraph(tag_font_fallbacks(card['name']), title_style)
-    img = platypus.Image(os.path.join(output_dir, card['image']), facesize[0], 
+    img = platypus.Image(os.path.join(output_dir, card['image']), facesize[0]-6*mm, 
                          facesize[1]*(CARD_SECTION_PROPS[1]/sum(CARD_SECTION_PROPS)), 
                          kind='proportional') if card['image'] else None
     desc = platypus.Paragraph(tag_font_fallbacks(card['description']), desc_style) if card['description'] else None
