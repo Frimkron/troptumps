@@ -3,4 +3,6 @@
 *~
 *.save
 *.orig
-tumps.json
+deck_*
+troptumps.egg-info
+.cache
