@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
 
-""" 
-TODO: Fix first sentence for "v.", "Co.", "Corp."
-    TODO: sentence end must be prefixed with multiple word characters and suffixed with capital
-TODO: Refactor
-"""
-
 
 import re
 import sys

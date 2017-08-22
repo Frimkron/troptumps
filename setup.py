@@ -12,7 +12,7 @@ setuptools.setup(
     author='Mark Frimston',
     author_email='mark@markfrimston.co.uk',
     url='https://github.com/frimkron/troptumps',
-    license='GPL',
+    license='GPL3',
     
     packages=['troptumps'],
     package_data={

@@ -169,18 +169,36 @@ def first_sentence(para):
     return re.match(r""" 
         # content
         (
-            [^("\[]   # any non-bracket
-            | ".*?"   # quote-delimited
+            ".*?"     # quote-delimited
             | \(.*?\) # round-delimited
-            | \[.*?\] # square-delimited
+            | \[.*?\] # square-delimited            
+            | \b(     # initial / abbreviation
+                [A-Z] 
+                | [Aa].[Bb] | [Aa]bbr | [Aa]cad | [Aa].[Dd] | [Aa]l | [Aa]lt | [Aa].[Mm] | [Aa]ssn | [Aa]ug | [Aa]ve 
+                | [Bb].[Aa] | [Bb].[Cc] | [Bb].[Pp] | [Bb].[Ss] | [Cc] | [Cc]al | [Cc]apt | [Cc]ent | [Cc]o | [Cc]ol 
+                | [Cc]omdr | [Cc]orp | [Cc]pl | [Cc]u | [Dd] | [Dd].[Cc] | [Dd]ec | [Dd]ept | [Dd]ist | [Dd]iv 
+                | [Dd]r | [Ee]d | [Ee].[Gg] | [Ee]st | [Ff]eb | [Ff]l | [Gg]al | [Gg]en | [Gg]ov | [Gg]rad | [Hh]on 
+                | [Ii].e | [Ii]n | [Ii]nc | [Ii]nst | [Jj]an | [Jj]r | [Ll]at | [Ll]b | [Ll]ib | [Ll]ong | [Ll]t 
+                | [Ll]td | [Mm].[Dd] | [Mm]r | [Mm]rs | [Mm]s | [Mm]sgr | [Mm]t | [Mm]ts | [Mm]us | [Nn]o | [Nn]ov 
+                | [Oo]ct | [Oo]p | [Pp]l | [Pp]op | [Pp]seud | [Pp]t | [Pp]ub | [Rr]ev | [Rr].[Nn] | [Ss]ept | [Ss]er 
+                | [Ss]gt | [Ss]r | [Ss]t | [Uu]ninc | [Uu]niv | [Uu].[Ss] | [Vv]ol | [Vv]s | [Vv] | [Ww]t
+              )\.
+            | .       # anything
         )*?
         # ending
         (
             # end symbols
             (
-                (?<! (\b[A-Z] | \.) ) \. # period, not prefixed with another period or single capital
-                | [!?]+                  # or one or more question/exclamation marks
-            ) (?=(\s|$))   # suffixed by whitespace or EOI
+                # period, not prefixed with another period
+                (?<! \. ) \.                                    
+                # or one or more question/exclamation marks
+                | [!?]+                  
+            ) 
+            # suffixed by:
+            (?=(
+                \s+[^a-z]  # whitespace and non-lower
+                |\s*$      # or optional whitespace then EOI
+            ))
             # alternatively just EOI
             | $ 
         )
@@ -418,10 +436,16 @@ def fetch_deck(input_dir):
                     res = urlopen(uri_to_ascii(card['image']))
                 except HTTPError as e:
                     if e.getcode() == 404:
+                        logging.warn("404 for {}".format(card['image']))
                         card['image'] = None
                         continue
                     raise
-                imagetype = IMAGE_TYPES[res.headers['Content-Type']]
+                contenttype = res.headers['Content-Type']
+                imagetype = IMAGE_TYPES.get(contenttype, None)
+                if imagetype is None:
+                    logging.warn("Non-image response ({}) for {}".format(contenttype, card['image']))
+                    card['image'] = None
+                    continue
                 imagename = 'card{:02d}.{}'.format(i, imagetype)
                 with open(os.path.join(output_dir, imagename), 'wb') as f:
                     while True:
