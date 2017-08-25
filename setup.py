@@ -5,6 +5,7 @@ from troptumps import VERSION
 here = os.path.abspath(os.path.dirname(__file__))
 
 setuptools.setup(
+
     name='troptumps',
     version=VERSION,
     description='A statistics-duelling deck generator using data from wikipedia',

@@ -6,3 +6,5 @@
 deck_*
 troptumps.egg-info
 .cache
+build
+dist
