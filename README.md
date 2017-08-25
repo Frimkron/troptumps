@@ -4,22 +4,32 @@ Trop Tumps
 A statistics-duelling deck generator using data from wikipedia.
 
 Trop Tumps chooses random categories from _dbpedia.org_ and turns them into 
-(mostly-useless) decks of cards representing things from that category,
-complete with 
+(mostly-useless) printable decks of cards representing things from that
+category, complete with exciting statistics.
 
 
 Installation
 ------------
 
-__TODO__
+Note: Trop Tumps requires Python 3.6+
+
+The simplest way to install Trop Tumps is using _pip_. With Python and pip 
+installed, Trop Tumps can simply be installed directly from the source 
+repository with:
+
+    pip install git+https://github.com/Frimkron/troptumps#egg=troptumps
+
+Later you can uninstall with:
+
+    pip uninstall troptumps
 
 
 Usage
 -----
 
-If you have installed a binary distribution, simply run the `troptumps` 
-executable (`troptumps.exe` on Windows) or, to run from the source, 
-simply run `python -m troptumps`.
+If you have installed Trop Trumps, it can be run using the `troptumps` 
+executable (`troptumps.exe` on Windows), otherwise the package can be run 
+directly with `python -m troptumps`.
 
 The script will connect to _dbpedia.org_ and keep trying to find a suitable
 category of things to turn into a card deck. Eventually, with a bit of luck, a 
