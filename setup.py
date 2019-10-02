@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import os.path
 import setuptools
 from troptumps import VERSION
@@ -10,6 +12,7 @@ setuptools.setup(
     version=VERSION,
     description='A statistics-duelling deck generator using data from wikipedia',
     long_description=open(os.path.join(here, 'README.md'), encoding='utf-8').read(),
+    long_description_content_type='text/markdown',
     author='Mark Frimston',
     author_email='mark@markfrimston.co.uk',
     url='https://github.com/frimkron/troptumps',

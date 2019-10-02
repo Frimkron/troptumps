@@ -13,15 +13,20 @@ Installation
 
 Note: Trop Tumps requires Python 3.6+
 
-The simplest way to install Trop Tumps is using _pip_. With Python and pip 
-installed, Trop Tumps can simply be installed directly from the source 
-repository with:
+The simplest way to install Trop Tumps is using [pip]. With Python and pip 
+installed, Trop Tumps can be installed from the Python Package Index with:
+
+    pip install troptumps
+
+or directly from the source repository with:
 
     pip install git+https://github.com/Frimkron/troptumps#egg=troptumps
 
-Later you can uninstall with:
+Alternatively you can download the source and install it with the `setup.py` 
+script.
+ 
 
-    pip uninstall troptumps
+[pip]: https://pip.pypa.io/en/stable/installing/
 
 
 Usage
@@ -55,9 +60,9 @@ Credits
 
 Created by Mark Frimston
 
------------ -------------------------------------------
-Github      <https://github.com/Frimkron>
-Website     <http://markrimston.co.uk>
-Email       <mark@markfrimston.co.uk>
-Twitter     [@frimkron](https://twitter.com/frimkron)
+Github: <https://github.com/Frimkron>  
+Website: <http://markrimston.co.uk>  
+Email: <mark@markfrimston.co.uk>  
+Twitter: [@frimkron](https://twitter.com/frimkron)  
+Mastodon: [frimkron@mastodon.social](https://mastodon.social/@frimkron)  
 
