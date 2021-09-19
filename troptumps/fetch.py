@@ -9,11 +9,15 @@ import os.path
 import dateutil.parser
 
 from datetime import datetime
-from urllib.request import urlopen, Request, HTTPError, URLError
+from urllib.request import urlopen, Request, HTTPError, URLError, URLopener
 from urllib.parse import urlencode
 
+from . import VERSION
 
-SPARQL_ENDPOINT = 'http://dbpedia.org/sparql'
+
+USER_AGENT = 'TropTumps/{} (https://github.com/Frimkron/troptumps) {}'.format(
+    VERSION, URLopener.version)
+SPARQL_ENDPOINT = 'https://dbpedia.org/sparql'
 DEFAULT_DATASET = 'http://dbpedia.org'
 MAX_CAT_SIZE = 1_000_000_000
 MIN_DECK_SIZE = 30
@@ -48,7 +52,8 @@ def query(q):
         'query': q,
         'format': 'json',    
     }).encode('utf-8')
-    headers = { 
+    headers = {
+        'User-Agent': USER_AGENT,
         'Content-Type': 'application/x-www-form-urlencoded', 
         'Accept': 'application/json, text/json, */*', 
     }
@@ -433,7 +438,7 @@ def fetch_deck(input_dir):
                     continue
                 logging.debug('Downloading {}'.format(card['image']))
                 try:
-                    res = urlopen(uri_to_ascii(card['image']))
+                    res = urlopen(Request(uri_to_ascii(card['image']), headers={'User-Agent': USER_AGENT}))
                 except HTTPError as e:
                     if e.getcode() == 404:
                         logging.warn("404 for {}".format(card['image']))
